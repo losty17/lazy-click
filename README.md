@@ -15,5 +15,7 @@ Scaffolded foundation:
 ## Run
 
 ```bash
+cp .env.example .env
+# fill in CLICKUP_API_TOKEN as needed
 go run ./cmd/lazy-click
 ```

@@ -14,7 +14,10 @@ import (
 )
 
 func Bootstrap(ctx context.Context) (*Runtime, error) {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
 
 	db, err := cache.Open(cfg.DBPath)
 	if err != nil {
