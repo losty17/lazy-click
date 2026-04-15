@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"command-task/internal/cache"
-	"command-task/internal/provider"
+	"lazy-click/internal/cache"
+	"lazy-click/internal/provider"
 )
 
 func (e *Engine) PullOnce(ctx context.Context) error {

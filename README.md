@@ -1,6 +1,6 @@
-# Command-Task
+# lazy-click
 
-Command-Task is a high-performance Go TUI for project management systems, starting with ClickUp.
+lazy-click is a high-performance Go TUI for project management systems, starting with ClickUp.
 
 ## Current Status
 
@@ -15,5 +15,5 @@ Scaffolded foundation:
 ## Run
 
 ```bash
-go run ./cmd/command-task
+go run ./cmd/lazy-click
 ```

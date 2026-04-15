@@ -1,4 +1,4 @@
-# Command-Task Roadmap (Living Document)
+# lazy-click Roadmap (Living Document)
 
 This roadmap is actively maintained during development. It defines the current architecture, milestones, and evolving decisions.
 

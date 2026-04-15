@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"command-task/internal/provider"
+	"lazy-click/internal/provider"
 )
 
 const baseURL = "https://api.clickup.com/api/v2"

@@ -6,11 +6,11 @@ import (
 	"os"
 	"time"
 
-	"command-task/internal/cache"
-	"command-task/internal/config"
-	"command-task/internal/provider/clickup"
-	syncengine "command-task/internal/sync"
-	"command-task/internal/tui"
+	"lazy-click/internal/cache"
+	"lazy-click/internal/config"
+	"lazy-click/internal/provider/clickup"
+	syncengine "lazy-click/internal/sync"
+	"lazy-click/internal/tui"
 )
 
 func Bootstrap(ctx context.Context) (*Runtime, error) {

@@ -3,9 +3,9 @@ package app
 import (
 	"context"
 
-	"command-task/internal/cache"
-	syncengine "command-task/internal/sync"
-	"command-task/internal/tui"
+	"lazy-click/internal/cache"
+	syncengine "lazy-click/internal/sync"
+	"lazy-click/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"gorm.io/gorm"

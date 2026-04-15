@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"command-task/internal/provider"
+	"lazy-click/internal/provider"
 )
 
 type Provider struct {

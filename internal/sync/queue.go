@@ -3,8 +3,8 @@ package syncengine
 import (
 	"time"
 
-	"command-task/internal/cache"
-	"command-task/internal/provider"
+	"lazy-click/internal/cache"
+	"lazy-click/internal/provider"
 )
 
 func (e *Engine) QueueTaskUpdate(taskID string, update provider.TaskUpdate) error {

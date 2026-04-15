@@ -1,4 +1,4 @@
-module command-task
+module lazy-click
 
 go 1.23.0
 

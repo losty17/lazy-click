@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"command-task/internal/app"
+	"lazy-click/internal/app"
 )
 
 func main() {

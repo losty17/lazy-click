@@ -1,0 +1,22 @@
+.DS_Store
+
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.out
+*.test
+coverage.out
+
+# Go workspace
+.idea/
+.vscode/
+
+# Local environment config
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.db-*

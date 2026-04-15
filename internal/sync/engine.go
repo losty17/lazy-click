@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"command-task/internal/cache"
-	"command-task/internal/provider"
+	"lazy-click/internal/cache"
+	"lazy-click/internal/provider"
 )
 
 type Engine struct {

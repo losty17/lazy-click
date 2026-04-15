@@ -9,7 +9,7 @@ type Config struct {
 func Load() Config {
 	dbPath := os.Getenv("COMMAND_TASK_DB_PATH")
 	if dbPath == "" {
-		dbPath = "command-task.db"
+		dbPath = "lazy-click.db"
 	}
 
 	return Config{

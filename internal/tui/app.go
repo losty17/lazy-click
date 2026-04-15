@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"command-task/internal/cache"
-	"command-task/internal/provider"
-	syncengine "command-task/internal/sync"
-	"command-task/internal/tui/components"
+	"lazy-click/internal/cache"
+	"lazy-click/internal/provider"
+	syncengine "lazy-click/internal/sync"
+	"lazy-click/internal/tui/components"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -150,7 +150,7 @@ func (m *RootModel) handleMove(delta int) {
 
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
-	header := HeaderStyle.Width(totalWidth).Render(truncateLine("Command-Task", totalWidth))
+	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
 
 	sidebar := PanelStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
 		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth, sidebarInnerHeight),

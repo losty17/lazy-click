@@ -1,6 +1,6 @@
 package syncengine
 
-import "command-task/internal/cache"
+import "lazy-click/internal/cache"
 
 // ResolveTaskConflict applies an MVP last-write-wins strategy.
 func ResolveTaskConflict(local cache.TaskEntity, remote cache.TaskEntity) cache.TaskEntity {
