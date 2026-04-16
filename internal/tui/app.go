@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type SyncQueuer interface {
@@ -274,13 +275,13 @@ func (m RootModel) View() string {
 		detailStyle = FocusedPanelStyle
 	}
 
-	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
+	sidebar := sidebarStyle.Width(sidebarInnerWidth).MaxWidth(sidebarInnerWidth).Height(sidebarInnerHeight).MaxHeight(sidebarInnerHeight).Render(
 		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth, sidebarInnerHeight),
 	)
-	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
+	table := tableStyle.Width(rightInnerWidth).MaxWidth(rightInnerWidth).Height(tableInnerHeight).MaxHeight(tableInnerHeight).Render(
 		m.taskTable.Render(m.activePane == 1, rightInnerWidth, tableInnerHeight),
 	)
-	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
+	detail := detailStyle.Width(rightInnerWidth).MaxWidth(rightInnerWidth).Height(detailInnerHeight).MaxHeight(detailInnerHeight).Render(
 		m.detailPanel.Render(m.activePane == 2, rightInnerWidth, detailInnerHeight),
 	)
 
@@ -318,7 +319,8 @@ func (m RootModel) View() string {
 	return lipgloss.NewStyle().
 		Width(totalWidth).
 		MaxWidth(totalWidth).
-		MaxHeight(max(totalHeightFromModel(m.height)-1, 8)).
+		Height(max(totalHeightFromModel(m.height), 8)).
+		MaxHeight(max(totalHeightFromModel(m.height), 8)).
 		Render(screen)
 }
 
@@ -335,11 +337,11 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	}
 	totalWidth = max(totalWidth, 20)
 
-	totalHeight := totalHeightFromModel(m.height) - 1
+	totalHeight := totalHeightFromModel(m.height)
 	if totalHeight < 8 {
 		totalHeight = 8
 	}
-	reserved := 5 // header + status + sync + statusLine + help
+	reserved := 4 // header + status + sync + help
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
 	if bodyOuterHeight < minBodyOuter {
@@ -378,7 +380,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 		sidebarInnerHeight = 1
 	}
 
-	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap 
+	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap
 	if rightInnerHeightBudget < 2 {
 		rightInnerHeightBudget = 2
 	}
@@ -416,14 +418,7 @@ func truncateLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(r[:width-1]) + "…"
+	return runewidth.Truncate(s, width, "…")
 }
 
 func (m RootModel) loadDataCmd() tea.Cmd {

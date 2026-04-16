@@ -1,19 +1,16 @@
 package components
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mattn/go-runewidth"
+)
 
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(r[:width-1]) + "…"
+	return runewidth.Truncate(s, width, "…")
 }
 
 func RenderMarkdownLines(markdown string) []string {
@@ -62,37 +59,67 @@ func fitCell(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	line := []rune(sanitizeLine(s))
-	if len(line) > width {
-		if width == 1 {
-			return "…"
-		}
-		return string(line[:width-1]) + "…"
+	line := sanitizeLine(s)
+	if runewidth.StringWidth(line) > width {
+		return runewidth.Truncate(line, width, "…")
 	}
-	return string(line) + strings.Repeat(" ", width-len(line))
+	return line + strings.Repeat(" ", width-runewidth.StringWidth(line))
 }
 
 func lineWindow(s string, width int, offset int) string {
 	if width <= 0 {
 		return ""
 	}
-	line := []rune(sanitizeLine(s))
+	line := sanitizeLine(s)
 	if offset < 0 {
 		offset = 0
 	}
-	if offset > len(line) {
-		offset = len(line)
+	lineWidth := runewidth.StringWidth(line)
+	if offset > lineWidth {
+		offset = lineWidth
 	}
-	end := offset + width
-	if end > len(line) {
-		end = len(line)
-	}
-	window := string(line[offset:end])
-	windowRunes := []rune(window)
-	if len(windowRunes) < width {
-		window += strings.Repeat(" ", width-len(windowRunes))
+	window := sliceByDisplayWidth(line, offset, width)
+	if w := runewidth.StringWidth(window); w < width {
+		window += strings.Repeat(" ", width-w)
 	}
 	return window
+}
+
+func sliceByDisplayWidth(s string, start int, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if start < 0 {
+		start = 0
+	}
+	currentWidth := 0
+	outWidth := 0
+	var b strings.Builder
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if rw < 0 {
+			rw = 0
+		}
+		nextWidth := currentWidth + rw
+		if nextWidth <= start {
+			currentWidth = nextWidth
+			continue
+		}
+		if currentWidth < start {
+			currentWidth = nextWidth
+			continue
+		}
+		if outWidth+rw > width {
+			break
+		}
+		b.WriteRune(r)
+		outWidth += rw
+		currentWidth = nextWidth
+		if outWidth >= width {
+			break
+		}
+	}
+	return b.String()
 }
 
 func visibleWindow(total int, selected int, size int) (start int, end int) {
