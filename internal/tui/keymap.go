@@ -6,6 +6,7 @@ type Keymap struct {
 	Search     string
 	Edit       string
 	AddComment string
+	Filter     string
 }
 
 func DefaultKeymap() Keymap {
@@ -15,5 +16,6 @@ func DefaultKeymap() Keymap {
 		Search:     "/",
 		Edit:       "i",
 		AddComment: "c",
+		Filter:     "f",
 	}
 }

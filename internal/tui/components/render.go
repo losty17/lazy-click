@@ -1,5 +1,7 @@
 package components
 
+import "strings"
+
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -12,6 +14,85 @@ func truncateToWidth(s string, width int) string {
 		return "…"
 	}
 	return string(r[:width-1]) + "…"
+}
+
+func RenderMarkdownLines(markdown string) []string {
+	if strings.TrimSpace(markdown) == "" {
+		return []string{"(no description)"}
+	}
+	raw := strings.ReplaceAll(markdown, "\r\n", "\n")
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	inCodeBlock := false
+	replacer := strings.NewReplacer("**", "", "__", "", "*", "", "_", "", "`", "")
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeBlock = !inCodeBlock
+			continue
+		}
+		if inCodeBlock {
+			out = append(out, "    "+line)
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "#"):
+			title := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+			out = append(out, strings.ToUpper(title))
+		case strings.HasPrefix(trimmed, "- "):
+			out = append(out, "• "+replacer.Replace(strings.TrimSpace(strings.TrimPrefix(trimmed, "- "))))
+		case strings.HasPrefix(trimmed, "* "):
+			out = append(out, "• "+replacer.Replace(strings.TrimSpace(strings.TrimPrefix(trimmed, "* "))))
+		default:
+			out = append(out, replacer.Replace(line))
+		}
+	}
+	return out
+}
+
+func sanitizeLine(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func fitCell(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	line := []rune(sanitizeLine(s))
+	if len(line) > width {
+		if width == 1 {
+			return "…"
+		}
+		return string(line[:width-1]) + "…"
+	}
+	return string(line) + strings.Repeat(" ", width-len(line))
+}
+
+func lineWindow(s string, width int, offset int) string {
+	if width <= 0 {
+		return ""
+	}
+	line := []rune(sanitizeLine(s))
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(line) {
+		offset = len(line)
+	}
+	end := offset + width
+	if end > len(line) {
+		end = len(line)
+	}
+	window := string(line[offset:end])
+	windowRunes := []rune(window)
+	if len(windowRunes) < width {
+		window += strings.Repeat(" ", width-len(windowRunes))
+	}
+	return window
 }
 
 func visibleWindow(total int, selected int, size int) (start int, end int) {

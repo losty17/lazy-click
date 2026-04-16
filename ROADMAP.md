@@ -65,14 +65,14 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 
 - [x] Build hierarchical sidebar navigation (scaffold).
 - [x] Implement task table (scaffold, now cache-bound to selected list).
-- [ ] Implement detail panel with markdown renderer.
-- [ ] Implement comment thread panel.
-- [ ] Implement status filter UX (including ClickUp statuses).
+- [x] Implement detail panel with markdown renderer.
+- [x] Implement comment thread panel.
+- [x] Implement status filter UX (including ClickUp statuses).
 
 ## Phase 4 — Interaction
 
 - [x] Implement task editing flow (`UpdateTask` pipeline, title toggle MVP via `i`).
-- [ ] Implement comment creation flow (`AddComment` pipeline).
+- [x] Implement comment creation flow (`AddComment` pipeline).
 - [ ] Implement fuzzy find (`/`) across task fields.
 - [x] Implement optimistic updates + reconcile with provider (queue + periodic push cycle).
 - [ ] Add robust error surfacing in TUI.
@@ -106,3 +106,10 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 - Reworked to a two-column layout (left sidebar, right table+detail stack) with strict max-height fitting.
 - Tightened terminal-fit logic (footer truncation + safety height margin) and made pull sync resilient to per-list failures.
 - Next improvement targets: full inline editor, comment compose flow, markdown rendering, and status filtering.
+
+### 2026-04-16
+
+- Implemented cache-backed detail panel rendering with simplified markdown display for task descriptions.
+- Added cache-backed comment thread rendering in the detail panel.
+- Added comment compose flow on `c` (type, Enter submit, Esc cancel) with local save + queued provider push.
+- Added status filter UX on `f`, cycling through list-specific cached statuses (including ClickUp statuses).

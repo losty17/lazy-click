@@ -33,6 +33,16 @@ func (r *Repository) GetAllLists() ([]ListEntity, error) {
 	return lists, err
 }
 
+func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {
+	stmt := r.db.Model(&TaskEntity{})
+	if listID != "" {
+		stmt = stmt.Where("list_id = ?", listID)
+	}
+	var statuses []string
+	err := stmt.Where("status <> ''").Distinct().Order("status asc").Pluck("status", &statuses).Error
+	return statuses, err
+}
+
 func (r *Repository) GetTasksByQuery(q TaskListQuery) ([]TaskEntity, error) {
 	stmt := r.db.Model(&TaskEntity{})
 	if q.ListID != "" {

@@ -1,6 +1,10 @@
 package components
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 type TaskTableRow struct {
 	ID       string
@@ -15,6 +19,7 @@ type TaskTableRow struct {
 type TaskTableModel struct {
 	rows []TaskTableRow
 	idx  int
+	x    int
 }
 
 func NewTaskTable() TaskTableModel {
@@ -34,6 +39,14 @@ func (m *TaskTableModel) Move(delta int) {
 		next = len(m.rows) - 1
 	}
 	m.idx = next
+}
+
+func (m *TaskTableModel) MoveHorizontal(delta int) {
+	next := m.x + delta
+	if next < 0 {
+		next = 0
+	}
+	m.x = next
 }
 
 func (m *TaskTableModel) SetRows(rows []TaskTableRow) {
@@ -63,12 +76,69 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	}
 
 	title := "Tasks"
-	if active {
-		title += " [focused]"
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	_ = active
+
+	const (
+		prefixWidth = 2
+		sepWidth    = 3
+	)
+	sepCount := 4
+	usable := width - prefixWidth - (sepCount * sepWidth)
+	if usable < 5 {
+		usable = 5
 	}
+	base := []int{34, 14, 10, 10, 18}
+	baseTotal := 86
+	col := make([]int, len(base))
+	sum := 0
+	for i := range base {
+		col[i] = (base[i] * usable) / baseTotal
+		if col[i] < 1 {
+			col[i] = 1
+		}
+		sum += col[i]
+	}
+	for sum < usable {
+		for _, i := range []int{0, 4, 1, 2, 3} {
+			if sum >= usable {
+				break
+			}
+			col[i]++
+			sum++
+		}
+	}
+	for sum > usable {
+		for _, i := range []int{0, 4, 1, 2, 3} {
+			if sum <= usable {
+				break
+			}
+			if col[i] > 1 {
+				col[i]--
+				sum--
+			}
+		}
+	}
+
+	format := func(row TaskTableRow) string {
+		return fitCell(row.Title, col[0]) + " | " +
+			fitCell(row.Status, col[1]) + " | " +
+			fitCell(row.Priority, col[2]) + " | " +
+			fitCell(row.DueDate, col[3]) + " | " +
+			fitCell(row.Tags, col[4])
+	}
+
+	headerLine := fitCell("Title", col[0]) + " | " +
+		fitCell("Status", col[1]) + " | " +
+		fitCell("Priority", col[2]) + " | " +
+		fitCell("Due Date", col[3]) + " | " +
+		fitCell("Tags", col[4])
+
 	lines := []string{
-		truncateToWidth(title, width),
-		truncateToWidth("Title | Status | Priority | Due Date | Tags", width),
+		titleStyle.Render(truncateToWidth(title, width)),
+		headerStyle.Render(lineWindow(headerLine, width, m.x)),
 	}
 
 	bodySize := height - 2
@@ -76,17 +146,19 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		bodySize = 0
 	}
 	if len(m.rows) == 0 {
-		lines = append(lines, truncateToWidth("  No tasks available for selected list", width))
+		lines = append(lines, lineWindow("  No tasks available for selected list", width, 0))
 	}
 	start, end := visibleWindow(len(m.rows), m.idx, bodySize)
 	for i := start; i < end; i++ {
 		row := m.rows[i]
 		prefix := "  "
+		style := lipgloss.NewStyle()
 		if i == m.idx {
 			prefix = "> "
+			style = selectedStyle
 		}
-		line := prefix + row.Title + " | " + row.Status + " | " + row.Priority + " | " + row.DueDate + " | " + row.Tags
-		lines = append(lines, truncateToWidth(line, width))
+		line := prefix + format(row)
+		lines = append(lines, style.Render(lineWindow(line, width, m.x)))
 	}
 
 	for len(lines) < height {

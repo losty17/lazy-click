@@ -17,6 +17,7 @@ import (
 
 type SyncQueuer interface {
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
+	QueueAddComment(taskID string, text string) error
 	Cycle(ctx context.Context) error
 }
 
@@ -27,17 +28,28 @@ type RootModel struct {
 	activePane  int
 	repo        *cache.Repository
 	sync        SyncQueuer
+	provider    string
 	statusLine  string
 	lists       []cache.ListEntity
 	sidebar     components.SidebarModel
 	taskTable   components.TaskTableModel
 	detailPanel components.DetailModel
+	statuses    []string
+
+	statusFilter  string
+	commentMode   bool
+	commentInput  string
+	commentTaskID string
+	syncing       bool
+	syncFrame     int
+	syncError     string
 }
 
 type dataLoadedMsg struct {
-	lists []cache.ListEntity
-	tasks []cache.TaskEntity
-	err   error
+	lists    []cache.ListEntity
+	tasks    []cache.TaskEntity
+	statuses []string
+	err      error
 }
 
 type editResultMsg struct {
@@ -48,12 +60,21 @@ type syncResultMsg struct {
 	err error
 }
 
-type pollTickMsg struct{}
+type commentResultMsg struct {
+	err error
+}
 
-func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, statusLine string) RootModel {
+type pollTickMsg struct{}
+type syncTickMsg struct{}
+
+func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, provider string, statusLine string) RootModel {
+	if provider == "" {
+		provider = "none"
+	}
 	return RootModel{
 		repo:        repo,
 		sync:        sync,
+		provider:    provider,
 		keymap:      DefaultKeymap(),
 		statusLine:  statusLine,
 		sidebar:     components.NewSidebar(),
@@ -72,31 +93,83 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case tea.KeyMsg:
+		if m.commentMode {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.commentMode = false
+				m.commentInput = ""
+				m.commentTaskID = ""
+				m.statusLine = "Comment canceled"
+			case tea.KeyEnter:
+				return m, m.submitCommentCmd()
+			case tea.KeyBackspace, tea.KeyDelete:
+				r := []rune(m.commentInput)
+				if len(r) > 0 {
+					m.commentInput = string(r[:len(r)-1])
+				}
+			default:
+				if len(msg.Runes) > 0 {
+					m.commentInput += string(msg.Runes)
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "tab":
 			m.activePane = (m.activePane + 1) % 3
-		case m.keymap.Down:
+		case "shift+tab", "backtab":
+			m.activePane = (m.activePane + 2) % 3
+		case m.keymap.Down, "down":
 			m.handleMove(1)
 			if m.activePane == 0 {
 				return m, m.loadDataCmd()
 			}
 			m.refreshDetail()
-		case m.keymap.Up:
+		case m.keymap.Up, "up":
 			m.handleMove(-1)
 			if m.activePane == 0 {
 				return m, m.loadDataCmd()
 			}
 			m.refreshDetail()
+		case "h", "left":
+			m.handleHorizontalMove(-2)
+		case "l", "right":
+			m.handleHorizontalMove(2)
 		case "r":
 			return m, m.loadDataCmd()
 		case "s":
-			return m, m.syncNowCmd()
+			if !m.syncing {
+				m.syncing = true
+				m.syncFrame = 0
+				m.statusLine = "Sync in progress..."
+				return m, tea.Batch(m.syncNowCmd(), m.syncTickCmd())
+			}
 		case m.keymap.Edit:
 			if m.activePane == 1 {
 				return m, m.editSelectedTaskCmd()
 			}
+		case m.keymap.AddComment:
+			if m.activePane == 1 {
+				row, ok := m.taskTable.Selected()
+				if !ok {
+					m.statusLine = "No task selected for comment"
+					return m, nil
+				}
+				m.commentMode = true
+				m.commentInput = ""
+				m.commentTaskID = row.ID
+				m.statusLine = "Compose comment and press Enter to submit (Esc to cancel)"
+				return m, nil
+			}
+		case m.keymap.Filter:
+			m.cycleStatusFilter(1)
+			return m, m.loadDataCmd()
+		case strings.ToUpper(m.keymap.Filter):
+			m.cycleStatusFilter(-1)
+			return m, m.loadDataCmd()
 		}
 	case dataLoadedMsg:
 		if msg.err != nil {
@@ -110,6 +183,10 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sidebar.SetItems(sidebarItems)
 		m.taskTable.SetRows(mapTasksToRows(msg.tasks))
+		m.statuses = msg.statuses
+		if m.statusFilter != "" && !containsString(m.statuses, m.statusFilter) {
+			m.statusFilter = ""
+		}
 		m.refreshDetail()
 		if len(msg.lists) == 0 {
 			m.statusLine = "No lists in cache yet. Press 's' to sync now."
@@ -124,14 +201,33 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusLine = "Task title updated locally and queued for ClickUp push"
 		return m, m.loadDataCmd()
 	case syncResultMsg:
+		m.syncing = false
 		if msg.err != nil {
+			m.syncError = msg.err.Error()
 			m.statusLine = "Sync failed: " + msg.err.Error()
 			return m, nil
 		}
+		m.syncError = ""
 		m.statusLine = "Sync completed"
+		return m, m.loadDataCmd()
+	case commentResultMsg:
+		m.commentMode = false
+		m.commentInput = ""
+		m.commentTaskID = ""
+		if msg.err != nil {
+			m.statusLine = "Comment failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.statusLine = "Comment saved locally and queued for ClickUp push"
 		return m, m.loadDataCmd()
 	case pollTickMsg:
 		return m, tea.Batch(m.loadDataCmd(), m.pollCmd())
+	case syncTickMsg:
+		if !m.syncing {
+			return m, nil
+		}
+		m.syncFrame++
+		return m, m.syncTickCmd()
 	}
 
 	return m, nil
@@ -148,32 +244,75 @@ func (m *RootModel) handleMove(delta int) {
 	}
 }
 
+func (m *RootModel) handleHorizontalMove(delta int) {
+	switch m.activePane {
+	case 0:
+		m.sidebar.MoveHorizontal(delta)
+	case 1:
+		m.taskTable.MoveHorizontal(delta)
+	case 2:
+		m.detailPanel.MoveHorizontal(delta)
+	}
+}
+
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
 	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
+	const verticalPaneGap = 1
+	const horizontalPaneGap = 3
 
-	sidebar := PanelStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
+	sidebarStyle := PanelStyle
+	if m.activePane == 0 {
+		sidebarStyle = FocusedPanelStyle
+	}
+	tableStyle := PanelStyle
+	if m.activePane == 1 {
+		tableStyle = FocusedPanelStyle
+	}
+	detailStyle := PanelStyle
+	if m.activePane == 2 {
+		detailStyle = FocusedPanelStyle
+	}
+
+	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
 		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth, sidebarInnerHeight),
 	)
-	table := PanelStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
+	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
 		m.taskTable.Render(m.activePane == 1, rightInnerWidth, tableInnerHeight),
 	)
-	detail := PanelStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
+	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
 		m.detailPanel.Render(m.activePane == 2, rightInnerWidth, detailInnerHeight),
 	)
 
-	right := lipgloss.JoinVertical(lipgloss.Left, table, detail)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, right)
+	right := lipgloss.JoinVertical(
+		lipgloss.Left,
+		lipgloss.NewStyle().MarginBottom(verticalPaneGap).Render(table),
+		detail,
+	)
+	body := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		lipgloss.NewStyle().MarginRight(horizontalPaneGap).Render(sidebar),
+		right,
+	)
 
-	status := fmt.Sprintf("Active pane: %d (tab to switch)", m.activePane+1)
-	help := "Keys: j/k navigate, / search, i edit task title, c comment, r refresh, s sync now, tab switch, q quit"
+	statusFilter := "all"
+	if m.statusFilter != "" {
+		statusFilter = m.statusFilter
+	}
+	status := fmt.Sprintf("Provider: %s | Status filter: %s", m.provider, statusFilter)
+	help := "Keys: hjkl/arrows move, i edit, c comment, f/F filter, r refresh, s sync, q quit"
+	if m.commentMode {
+		help = "Comment mode: type text, Enter submit, Esc cancel"
+	}
+	syncLine := m.syncProgressLine(totalWidth)
 
 	screen := strings.Join([]string{
 		header,
 		body,
-		truncateLine(status, totalWidth),
-		truncateLine(m.statusLine, totalWidth),
-		truncateLine(help, totalWidth),
+		StatusStyle.Render(truncateLine(status, totalWidth)),
+		syncLine,
+		// StatusStyle.Render(truncateLine(m.statusLine, totalWidth)),
+		HelpStyle.Render(truncateLine(help, totalWidth)),
 	}, "\n")
 
 	return lipgloss.NewStyle().
@@ -186,6 +325,8 @@ func (m RootModel) View() string {
 func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWidth int, sidebarInnerHeight int, tableInnerHeight int, detailInnerHeight int) {
 	hFrame := PanelStyle.GetHorizontalFrameSize()
 	vFrame := PanelStyle.GetVerticalFrameSize()
+	const verticalPaneGap = 1
+	const horizontalPaneGap = 3
 
 	if m.width > 0 {
 		totalWidth = m.width - 2
@@ -198,14 +339,14 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	if totalHeight < 8 {
 		totalHeight = 8
 	}
-	reserved := 4 // header + status + statusLine + help
+	reserved := 5 // header + status + sync + statusLine + help
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
 	if bodyOuterHeight < minBodyOuter {
 		bodyOuterHeight = minBodyOuter
 	}
 
-	innerWidthBudget := totalWidth - (2 * hFrame)
+	innerWidthBudget := totalWidth - (2 * hFrame) - horizontalPaneGap
 	if innerWidthBudget < 2 {
 		innerWidthBudget = 2
 	}
@@ -237,7 +378,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 		sidebarInnerHeight = 1
 	}
 
-	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame)
+	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap 
 	if rightInnerHeightBudget < 2 {
 		rightInnerHeightBudget = 2
 	}
@@ -302,13 +443,19 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 
 		tasks, err := m.repo.GetTasksByQuery(cache.TaskListQuery{
 			ListID:        selectedListID,
+			Statuses:      selectedStatusFilter(m.statusFilter),
 			IncludeClosed: true,
 		})
 		if err != nil {
 			return dataLoadedMsg{err: err}
 		}
 
-		return dataLoadedMsg{lists: lists, tasks: tasks}
+		statuses, err := m.repo.GetTaskStatusesByList(selectedListID)
+		if err != nil {
+			return dataLoadedMsg{err: err}
+		}
+
+		return dataLoadedMsg{lists: lists, tasks: tasks, statuses: statuses}
 	}
 }
 
@@ -329,13 +476,50 @@ func (m *RootModel) refreshDetail() {
 		m.detailPanel.SetSections([]string{"No task selected"})
 		return
 	}
+
+	task, err := m.repo.GetTaskByID(selected.ID)
+	if err != nil {
+		m.detailPanel.SetSections([]string{
+			"Title: " + selected.Title,
+			"Failed to load task detail: " + err.Error(),
+		})
+		return
+	}
+	if task == nil {
+		m.detailPanel.SetSections([]string{"Task not found in cache"})
+		return
+	}
+	comments, err := m.repo.GetTaskComments(selected.ID, 50)
+	if err != nil {
+		comments = nil
+	}
+
+	descriptionLines := components.RenderMarkdownLines(task.DescriptionMD)
+	commentLines := make([]string, 0, len(comments)+1)
+	if len(comments) == 0 {
+		commentLines = append(commentLines, "(no comments in cache)")
+	} else {
+		for _, c := range comments {
+			author := c.AuthorName
+			if author == "" {
+				author = "unknown"
+			}
+			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", author, strings.TrimSpace(c.BodyMD)))
+		}
+	}
+
 	sections := []string{
-		"Title: " + selected.Title,
-		"Status: " + selected.Status,
+		"Title: " + task.Title,
+		"Status: " + task.Status,
 		"Priority: " + selected.Priority,
 		"Due Date: " + selected.DueDate,
 		"Tags: " + selected.Tags,
+		"",
+		"Description:",
 	}
+	sections = append(sections, descriptionLines...)
+	sections = append(sections, "", "Comments:")
+	sections = append(sections, commentLines...)
 	m.detailPanel.SetSections(sections)
 }
 
@@ -376,6 +560,119 @@ func (m RootModel) syncNowCmd() tea.Cmd {
 		err := m.sync.Cycle(ctx)
 		return syncResultMsg{err: err}
 	}
+}
+
+func (m RootModel) submitCommentCmd() tea.Cmd {
+	taskID := m.commentTaskID
+	text := strings.TrimSpace(m.commentInput)
+	if taskID == "" {
+		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("comment target not set")} }
+	}
+	if text == "" {
+		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("comment cannot be empty")} }
+	}
+	if m.repo == nil || m.sync == nil {
+		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("sync/comment services unavailable")} }
+	}
+
+	return func() tea.Msg {
+		now := time.Now().UnixMilli()
+		if err := m.repo.SaveComments([]cache.CommentEntity{
+			{
+				ID:            fmt.Sprintf("local-%d", now),
+				TaskID:        taskID,
+				AuthorName:    "you",
+				BodyMD:        text,
+				CreatedAtUnix: now,
+			},
+		}); err != nil {
+			return commentResultMsg{err: err}
+		}
+		if err := m.sync.QueueAddComment(taskID, text); err != nil {
+			return commentResultMsg{err: err}
+		}
+		return commentResultMsg{}
+	}
+}
+
+func (m *RootModel) cycleStatusFilter(step int) {
+	statusOptions := append([]string{""}, m.statuses...)
+	if len(statusOptions) == 1 {
+		m.statusFilter = ""
+		m.statusLine = "No status values available for selected list"
+		return
+	}
+
+	current := 0
+	for i, status := range statusOptions {
+		if status == m.statusFilter {
+			current = i
+			break
+		}
+	}
+	next := (current + step) % len(statusOptions)
+	if next < 0 {
+		next += len(statusOptions)
+	}
+	m.statusFilter = statusOptions[next]
+	if m.statusFilter == "" {
+		m.statusLine = "Status filter: all"
+	} else {
+		m.statusLine = "Status filter: " + m.statusFilter
+	}
+}
+
+func (m RootModel) syncTickCmd() tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
+		return syncTickMsg{}
+	})
+}
+
+func (m RootModel) syncProgressLine(width int) string {
+	if width < 10 {
+		return ""
+	}
+	prefix := fmt.Sprintf("Sync [%s]: ", m.provider)
+	if m.sync == nil {
+		return SyncIdleStyle.Render(prefix + "disabled")
+	}
+	if !m.syncing {
+		if m.syncError != "" {
+			return SyncErrorStyle.Render(prefix + "failed: " + m.syncError)
+		}
+		return SyncIdleStyle.Render(prefix + "idle")
+	}
+	barWidth := max(10, min(24, width-len(prefix)-10))
+	pos := m.syncFrame % barWidth
+	cells := make([]rune, barWidth)
+	for i := range cells {
+		cells[i] = '░'
+	}
+	cells[pos] = '█'
+	return SyncRunStyle.Render(fmt.Sprintf("%s[%s] running", prefix, string(cells)))
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func selectedStatusFilter(status string) []string {
+	if status == "" {
+		return nil
+	}
+	return []string{status}
+}
+
+func containsString(values []string, target string) bool {
+	for _, v := range values {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (m RootModel) pollCmd() tea.Cmd {

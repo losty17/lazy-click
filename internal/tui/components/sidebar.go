@@ -1,10 +1,15 @@
 package components
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 type SidebarModel struct {
 	items []string
 	idx   int
+	x     int
 }
 
 func NewSidebar() SidebarModel {
@@ -45,16 +50,23 @@ func (m SidebarModel) SelectedIndex() int {
 	return m.idx
 }
 
+func (m *SidebarModel) MoveHorizontal(delta int) {
+	next := m.x + delta
+	if next < 0 {
+		next = 0
+	}
+	m.x = next
+}
+
 func (m SidebarModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
 
 	header := "Sidebar (Workspace > Space > List)"
-	if active {
-		header += " [focused]"
-	}
-	lines := []string{truncateToWidth(header, width)}
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	lines := []string{headerStyle.Render(truncateToWidth(header, width))}
 
 	bodySize := height - 1
 	if bodySize < 0 {
@@ -64,10 +76,12 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 	for i := start; i < end; i++ {
 		item := m.items[i]
 		prefix := "  "
+		style := lipgloss.NewStyle()
 		if i == m.idx {
 			prefix = "> "
+			style = selectedStyle
 		}
-		lines = append(lines, truncateToWidth(prefix+item, width))
+		lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
 	}
 
 	for len(lines) < height {
