@@ -97,6 +97,7 @@ func sliceByDisplayWidth(s string, start int, width int) string {
 	var b strings.Builder
 	for _, r := range s {
 		rw := runewidth.RuneWidth(r)
+		// Guard against non-printing/control runes being reported with negative width.
 		if rw < 0 {
 			rw = 0
 		}
@@ -105,6 +106,7 @@ func sliceByDisplayWidth(s string, start int, width int) string {
 			currentWidth = nextWidth
 			continue
 		}
+		// If a wide rune crosses the left edge of the window, skip it to keep strict alignment.
 		if currentWidth < start {
 			currentWidth = nextWidth
 			continue
