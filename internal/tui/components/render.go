@@ -102,7 +102,8 @@ func sliceByDisplayWidth(s string, start int, width int) string {
 			currentWidth = nextWidth
 			continue
 		}
-		// If a wide rune crosses the left edge of the window, skip it to keep strict alignment.
+		// If a wide rune overlaps the left boundary, skip it so content always starts
+		// exactly at the requested display column and never introduces half-cell drift.
 		if currentWidth < start {
 			currentWidth = nextWidth
 			continue
