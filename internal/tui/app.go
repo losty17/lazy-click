@@ -341,7 +341,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	if totalHeight < 8 {
 		totalHeight = 8
 	}
-	reserved := 4 // header + status + sync + help
+	reserved := 4 // header + status + sync + help (statusLine is intentionally not rendered)
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
 	if bodyOuterHeight < minBodyOuter {
