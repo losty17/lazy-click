@@ -26,6 +26,13 @@ func TestLineWindowRespectsDisplayWidth(t *testing.T) {
 	}
 }
 
+func TestLineWindowSkipsWideRuneOverlappingStart(t *testing.T) {
+	got := lineWindow("界abc", 3, 1)
+	if got != "abc" {
+		t.Fatalf("lineWindow overlap result = %q, want %q", got, "abc")
+	}
+}
+
 func TestTruncateToWidthRespectsDisplayWidth(t *testing.T) {
 	got := truncateToWidth("界界界abc", 5)
 	if got != "界界…" {
