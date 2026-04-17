@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ type RootModel struct {
 	statuses    []string
 
 	statusFilter  string
+	searchMode    bool
+	searchInput   string
+	searchQuery   string
+	searchBackup  string
 	commentMode   bool
 	commentInput  string
 	commentTaskID string
@@ -114,6 +119,36 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.searchMode {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.searchMode = false
+				m.searchInput = ""
+				m.searchQuery = m.searchBackup
+				return m, m.loadDataCmd()
+			case tea.KeyEnter:
+				m.searchMode = false
+				m.searchQuery = strings.TrimSpace(m.searchInput)
+				m.searchInput = ""
+				if m.searchQuery == "" {
+					m.statusLine = "Search cleared"
+				} else {
+					m.statusLine = "Search: " + m.searchQuery
+				}
+				return m, m.loadDataCmd()
+			case tea.KeyBackspace, tea.KeyDelete:
+				r := []rune(m.searchInput)
+				if len(r) > 0 {
+					m.searchInput = string(r[:len(r)-1])
+				}
+			default:
+				if len(msg.Runes) > 0 {
+					m.searchInput += string(msg.Runes)
+				}
+			}
+			m.searchQuery = strings.TrimSpace(m.searchInput)
+			return m, m.loadDataCmd()
+		}
 
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -170,6 +205,11 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case strings.ToUpper(m.keymap.Filter):
 			m.cycleStatusFilter(-1)
 			return m, m.loadDataCmd()
+		case m.keymap.Search:
+			m.searchMode = true
+			m.searchInput = m.searchQuery
+			m.searchBackup = m.searchQuery
+			return m, nil
 		}
 	case dataLoadedMsg:
 		if msg.err != nil {
@@ -303,10 +343,16 @@ func (m RootModel) View() string {
 	if m.statusFilter != "" {
 		statusFilter = m.statusFilter
 	}
-	status := fmt.Sprintf("Provider: %s | Status filter: %s", m.provider, statusFilter)
-	help := "Keys: hjkl/arrows move, i edit, c comment, f/F filter, r refresh, s sync, q quit"
+	searchFilter := "off"
+	if m.searchQuery != "" {
+		searchFilter = m.searchQuery
+	}
+	status := fmt.Sprintf("Provider: %s | Status filter: %s | Search: %s", m.provider, statusFilter, searchFilter)
+	help := "Keys: hjkl/arrows move, / search, i edit, c comment, f/F filter, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
+	} else if m.searchMode {
+		help = fmt.Sprintf("Search mode: %s (type to filter, Enter apply, Esc cancel)", m.searchInput)
 	}
 	syncLine := m.syncProgressLine(totalWidth)
 
@@ -343,7 +389,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	totalWidth = max(totalWidth, 20)
 
 	// Reserve fixed lines for non-body UI elements (header/status/help), then allocate body height.
-	totalHeight := max(totalHeightFromModel(m.height) - 1, 8)
+	totalHeight := max(totalHeightFromModel(m.height)-1, 8)
 	reserved := 5 // header + status + sync + statusLine + help
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
@@ -352,7 +398,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	}
 
 	// Split horizontal space into sidebar (left) and content column (right).
-	innerWidthBudget := max(totalWidth - (2 * hFrame) - horizontalPaneGap, 2)
+	innerWidthBudget := max(totalWidth-(2*hFrame)-horizontalPaneGap, 2)
 
 	sidebarInnerWidth = innerWidthBudget / 3
 	minSidebar := 8
@@ -382,7 +428,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 		sidebarInnerHeight = 1
 	}
 
-	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap 
+	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap
 	if rightInnerHeightBudget < 2 {
 		rightInnerHeightBudget = 2
 	}
@@ -446,6 +492,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 		if err != nil {
 			return dataLoadedMsg{err: err}
 		}
+		tasks = fuzzyFindTasks(tasks, m.searchQuery)
 
 		statuses, err := m.repo.GetTaskStatusesByList(selectedListID)
 		if err != nil {
@@ -700,4 +747,118 @@ func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
 		})
 	}
 	return rows
+}
+
+func fuzzyFindTasks(tasks []cache.TaskEntity, query string) []cache.TaskEntity {
+	normalizedQuery := normalizeSearchText(query)
+	if normalizedQuery == "" {
+		return tasks
+	}
+
+	type scoredTask struct {
+		task  cache.TaskEntity
+		score int
+		idx   int
+	}
+
+	scored := make([]scoredTask, 0, len(tasks))
+	for i, task := range tasks {
+		if score, ok := fuzzyScoreTask(task, normalizedQuery); ok {
+			scored = append(scored, scoredTask{task: task, score: score, idx: i})
+		}
+	}
+	sort.SliceStable(scored, func(i int, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].idx < scored[j].idx
+		}
+		return scored[i].score > scored[j].score
+	})
+
+	out := make([]cache.TaskEntity, 0, len(scored))
+	for _, item := range scored {
+		out = append(out, item.task)
+	}
+	return out
+}
+
+func fuzzyScoreTask(task cache.TaskEntity, query string) (int, bool) {
+	due := "-"
+	if task.DueAtUnixMS != nil {
+		due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
+	}
+
+	fields := []string{
+		task.Title,
+		task.Status,
+		task.PriorityLabel,
+		due,
+		task.DescriptionMD,
+		task.CustomFieldsJSON,
+	}
+	bestScore := 0
+	matched := false
+	for _, field := range fields {
+		score, ok := fuzzyScoreField(query, field)
+		if !ok {
+			continue
+		}
+		if !matched || score > bestScore {
+			bestScore = score
+		}
+		matched = true
+	}
+	return bestScore, matched
+}
+
+func fuzzyScoreField(query string, candidate string) (int, bool) {
+	candidate = normalizeSearchText(candidate)
+	if query == "" {
+		return 0, true
+	}
+	if candidate == "" {
+		return 0, false
+	}
+
+	if idx := strings.Index(candidate, query); idx >= 0 {
+		score := 1200 - (idx * 4) - (len(candidate) - len(query))
+		return score, true
+	}
+
+	qRunes := []rune(query)
+	cRunes := []rune(candidate)
+	positions := make([]int, len(qRunes))
+	qi := 0
+	for ci, r := range cRunes {
+		if r == qRunes[qi] {
+			positions[qi] = ci
+			qi++
+			if qi == len(qRunes) {
+				break
+			}
+		}
+	}
+	if qi != len(qRunes) {
+		return 0, false
+	}
+
+	first := positions[0]
+	last := positions[len(positions)-1]
+	span := last - first + 1
+	gaps := span - len(qRunes)
+	score := 900 - (gaps * 10) - (first * 3) - (len(cRunes) - len(qRunes))
+	if first == 0 {
+		score += 60
+	} else if cRunes[first-1] == ' ' {
+		score += 30
+	}
+	return score, true
+}
+
+func normalizeSearchText(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	return strings.Join(strings.Fields(s), " ")
 }

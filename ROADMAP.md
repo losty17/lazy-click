@@ -73,7 +73,7 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 
 - [x] Implement task editing flow (`UpdateTask` pipeline, title toggle MVP via `i`).
 - [x] Implement comment creation flow (`AddComment` pipeline).
-- [ ] Implement fuzzy find (`/`) across task fields.
+- [x] Implement fuzzy find (`/`) across task fields.
 - [x] Implement optimistic updates + reconcile with provider (queue + periodic push cycle).
 - [ ] Add robust error surfacing in TUI.
 
