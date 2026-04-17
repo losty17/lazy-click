@@ -75,6 +75,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		return ""
 	}
 
+	// Title + header are fixed; data rows fill the remaining height.
 	title := "Tasks"
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
@@ -90,6 +91,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	if usable < 5 {
 		usable = 5
 	}
+	// Column widths are proportional to base weights and then balanced to exact width.
 	base := []int{34, 14, 10, 10, 18}
 	baseTotal := 86
 	col := make([]int, len(base))
@@ -141,6 +143,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		headerStyle.Render(lineWindow(headerLine, width, m.x)),
 	}
 
+	// Body viewport excludes title/header lines.
 	bodySize := height - 2
 	if bodySize < 0 {
 		bodySize = 0
@@ -157,10 +160,12 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 			prefix = "> "
 			style = selectedStyle
 		}
+		// lineWindow enables horizontal scrolling over wide rows.
 		line := prefix + format(row)
 		lines = append(lines, style.Render(lineWindow(line, width, m.x)))
 	}
 
+	// Fill trailing rows so panel height stays stable when item count is small.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}

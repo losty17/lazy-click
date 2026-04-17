@@ -63,11 +63,14 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 		return ""
 	}
 
+	// First line is a static header; remaining lines are list rows.
 	header := "Sidebar (Workspace > Space > List)"
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	_ = active
 	lines := []string{headerStyle.Render(truncateToWidth(header, width))}
 
+	// Keep the selected item centered when possible and only render the visible slice.
 	bodySize := height - 1
 	if bodySize < 0 {
 		bodySize = 0
@@ -81,9 +84,11 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 			prefix = "> "
 			style = selectedStyle
 		}
+		// lineWindow applies horizontal scrolling (m.x) while preserving fixed row width.
 		lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
 	}
 
+	// Pad to the requested height so the panel always renders as a full rectangle.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}

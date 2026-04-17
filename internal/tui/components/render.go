@@ -20,6 +20,7 @@ func RenderMarkdownLines(markdown string) []string {
 	if strings.TrimSpace(markdown) == "" {
 		return []string{"(no description)"}
 	}
+	// Convert markdown-ish text to a plain-text terminal friendly representation.
 	raw := strings.ReplaceAll(markdown, "\r\n", "\n")
 	lines := strings.Split(raw, "\n")
 	out := make([]string, 0, len(lines))
@@ -29,6 +30,7 @@ func RenderMarkdownLines(markdown string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
+			// Track fenced code blocks so content can be shown in monospaced-like indented form.
 			inCodeBlock = !inCodeBlock
 			continue
 		}
@@ -52,6 +54,7 @@ func RenderMarkdownLines(markdown string) []string {
 }
 
 func sanitizeLine(s string) string {
+	// Replace control whitespace with spaces to keep table/pane layout predictable.
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
@@ -62,6 +65,7 @@ func fitCell(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
+	// Force each cell to exactly width runes (truncate with ellipsis or pad with spaces).
 	line := []rune(sanitizeLine(s))
 	if len(line) > width {
 		if width == 1 {
@@ -76,6 +80,7 @@ func lineWindow(s string, width int, offset int) string {
 	if width <= 0 {
 		return ""
 	}
+	// Return a fixed-width horizontal viewport into a long line.
 	line := []rune(sanitizeLine(s))
 	if offset < 0 {
 		offset = 0
@@ -109,6 +114,7 @@ func visibleWindow(total int, selected int, size int) (start int, end int) {
 		selected = total - 1
 	}
 
+	// Keep selection near the middle when possible; clamp window to valid range.
 	start = selected - size/2
 	if start < 0 {
 		start = 0

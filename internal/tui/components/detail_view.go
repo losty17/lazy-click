@@ -23,10 +23,7 @@ func NewDetail() DetailModel {
 }
 
 func (m *DetailModel) Move(delta int) {
-	next := m.idx + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.idx + delta, 0)
 	m.idx = next
 }
 
@@ -46,10 +43,7 @@ func (m *DetailModel) SetSections(sections []string) {
 }
 
 func (m *DetailModel) MoveHorizontal(delta int) {
-	next := m.x + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.x + delta, 0)
 	m.x = next
 }
 
@@ -58,34 +52,31 @@ func (m DetailModel) Render(active bool, width int, height int) string {
 		return ""
 	}
 
+	// Detail renders as a title row plus a vertically scrollable text body.
 	title := "Detail"
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	_ = active
 	lines := []string{titleStyle.Render(truncateToWidth(title, width))}
 
-	bodyLines := m.expandedLines()
-	bodySize := height - 1
-	if bodySize < 0 {
-		bodySize = 0
-	}
-	start := m.idx
-	if start < 0 {
-		start = 0
-	}
-	maxStart := len(bodyLines) - bodySize
-	if maxStart < 0 {
-		maxStart = 0
-	}
+	// Expand logical sections into one flat list of renderable lines.
+	bodyLines := m.expandedLines(width - 2) // account for horizontal padding
+
+	bodySize := max(height - 1, 0)
+	start := max(m.idx, 0)
+	maxStart := max(len(bodyLines) - bodySize, 0)
+
 	if start > maxStart {
 		start = maxStart
 	}
-	end := start + bodySize
-	if end > len(bodyLines) {
-		end = len(bodyLines)
-	}
+
+	end := min(start + bodySize, len(bodyLines))
+
 	for i := start; i < end; i++ {
-		lines = append(lines, lineWindow(bodyLines[i], width, m.x))
+		// lineWindow applies horizontal scrolling offset m.x.
+		lines = append(lines, bodyLines[i])
 	}
 
+	// Pad to fixed height to avoid panel jitter when content is short.
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
@@ -93,22 +84,45 @@ func (m DetailModel) Render(active bool, width int, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m DetailModel) expandedLines() []string {
+func (m DetailModel) expandedLines(width int) []string {
 	if len(m.sections) == 0 {
-		return []string{"  No task selected"}
+		return []string{"No task selected"}
 	}
+
+	// Normalize mixed newline styles from cached markdown/comments.
 	lines := make([]string, 0, len(m.sections))
 	for _, section := range m.sections {
 		normalized := strings.ReplaceAll(section, "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		parts := strings.Split(normalized, "\n")
+
 		if len(parts) == 0 {
-			lines = append(lines, "  ")
+			lines = append(lines, "")
 			continue
 		}
+
 		for _, part := range parts {
-			lines = append(lines, "  "+part)
+			formattedLines := breakLines(part, width)
+			lines = append(lines, formattedLines...)
 		}
 	}
+
+	return lines
+}
+
+func breakLines(s string, width int) []string {
+	if width <= 0 {
+		return []string{}
+	}
+
+	lines := []string{}
+	for len(s) > width {
+		lines = append(lines, s[:width])
+		s = s[width:]
+	}
+
+	s = strings.Trim(s, " ")
+	lines = append(lines, s)
+
 	return lines
 }

@@ -256,11 +256,13 @@ func (m *RootModel) handleHorizontalMove(delta int) {
 }
 
 func (m RootModel) View() string {
+	// Compute all pane dimensions up front so every renderer gets a consistent viewport.
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
 	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
 	const verticalPaneGap = 1
 	const horizontalPaneGap = 3
 
+	// Highlight the currently active pane by swapping to the focused border style.
 	sidebarStyle := PanelStyle
 	if m.activePane == 0 {
 		sidebarStyle = FocusedPanelStyle
@@ -274,6 +276,7 @@ func (m RootModel) View() string {
 		detailStyle = FocusedPanelStyle
 	}
 
+	// Render each pane using its calculated inner size; PanelStyle adds frame/padding around it.
 	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
 		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth, sidebarInnerHeight),
 	)
@@ -284,6 +287,7 @@ func (m RootModel) View() string {
 		m.detailPanel.Render(m.activePane == 2, rightInnerWidth, detailInnerHeight),
 	)
 
+	// Stack task table over detail on the right, then place sidebar + right column side by side.
 	right := lipgloss.JoinVertical(
 		lipgloss.Left,
 		lipgloss.NewStyle().MarginBottom(verticalPaneGap).Render(table),
@@ -306,6 +310,7 @@ func (m RootModel) View() string {
 	}
 	syncLine := m.syncProgressLine(totalWidth)
 
+	// Assemble the full screen in top-to-bottom order.
 	screen := strings.Join([]string{
 		header,
 		body,
@@ -323,11 +328,13 @@ func (m RootModel) View() string {
 }
 
 func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWidth int, sidebarInnerHeight int, tableInnerHeight int, detailInnerHeight int) {
+	// Frame sizes are used to translate between outer panel size and inner content size.
 	hFrame := PanelStyle.GetHorizontalFrameSize()
 	vFrame := PanelStyle.GetVerticalFrameSize()
 	const verticalPaneGap = 1
 	const horizontalPaneGap = 3
 
+	// Derive total drawable width from terminal size, with a fallback for initial render.
 	if m.width > 0 {
 		totalWidth = m.width - 2
 	} else {
@@ -335,10 +342,8 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	}
 	totalWidth = max(totalWidth, 20)
 
-	totalHeight := totalHeightFromModel(m.height) - 1
-	if totalHeight < 8 {
-		totalHeight = 8
-	}
+	// Reserve fixed lines for non-body UI elements (header/status/help), then allocate body height.
+	totalHeight := max(totalHeightFromModel(m.height) - 1, 8)
 	reserved := 5 // header + status + sync + statusLine + help
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
@@ -346,10 +351,8 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 		bodyOuterHeight = minBodyOuter
 	}
 
-	innerWidthBudget := totalWidth - (2 * hFrame) - horizontalPaneGap
-	if innerWidthBudget < 2 {
-		innerWidthBudget = 2
-	}
+	// Split horizontal space into sidebar (left) and content column (right).
+	innerWidthBudget := max(totalWidth - (2 * hFrame) - horizontalPaneGap, 2)
 
 	sidebarInnerWidth = innerWidthBudget / 3
 	minSidebar := 8
@@ -373,6 +376,7 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 		}
 	}
 
+	// Sidebar uses full body height; right column is split into table (top) and detail (bottom).
 	sidebarInnerHeight = bodyOuterHeight - vFrame
 	if sidebarInnerHeight < 1 {
 		sidebarInnerHeight = 1
@@ -396,13 +400,6 @@ func (m RootModel) layout() (totalWidth int, sidebarInnerWidth int, rightInnerWi
 	}
 
 	return totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight
-}
-
-func max(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func totalHeightFromModel(height int) int {
