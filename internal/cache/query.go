@@ -15,6 +15,19 @@ type TaskListQuery struct {
 	Offset        int
 }
 
+type ListSortMode string
+
+const (
+	ListSortNameAsc          ListSortMode = "name"
+	ListSortMostRecentlyOpen ListSortMode = "recent"
+)
+
+type ListQuery struct {
+	Search        string
+	FavoritesOnly bool
+	SortMode      ListSortMode
+}
+
 func (r *Repository) GetSpaces() ([]SpaceEntity, error) {
 	var spaces []SpaceEntity
 	err := r.db.Order("name asc").Find(&spaces).Error
@@ -28,9 +41,41 @@ func (r *Repository) GetListsBySpace(spaceID string) ([]ListEntity, error) {
 }
 
 func (r *Repository) GetAllLists() ([]ListEntity, error) {
+	return r.GetListsByQuery(ListQuery{SortMode: ListSortNameAsc})
+}
+
+func (r *Repository) GetListsByQuery(q ListQuery) ([]ListEntity, error) {
 	var lists []ListEntity
-	err := r.db.Order("name asc").Find(&lists).Error
+	stmt := r.db.Model(&ListEntity{})
+	if q.Search != "" {
+		stmt = stmt.Where("name LIKE ?", "%"+q.Search+"%")
+	}
+	if q.FavoritesOnly {
+		stmt = stmt.Where("favorite = ?", true)
+	}
+	if q.SortMode == ListSortMostRecentlyOpen {
+		stmt = stmt.Order("last_opened_unix desc").Order("name asc")
+	} else {
+		stmt = stmt.Order("name asc")
+	}
+	err := stmt.Find(&lists).Error
 	return lists, err
+}
+
+func (r *Repository) GetMostRecentlyOpenedListID() (string, error) {
+	var list ListEntity
+	err := r.db.Model(&ListEntity{}).
+		Where("last_opened_unix > 0").
+		Order("last_opened_unix desc").
+		Limit(1).
+		First(&list).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+	return list.ID, nil
 }
 
 func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {

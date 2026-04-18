@@ -25,15 +25,20 @@ type addCommentPayload struct {
 }
 
 func (e *Engine) PushOnce(ctx context.Context) error {
+	e.setSyncStatus("checking pending push queue")
 	item, err := e.repo.ClaimNextPendingSyncItem()
 	if err != nil || item == nil {
+		e.setSyncStatus("no pending push items")
 		return err
 	}
+	e.setSyncStatus("pushing " + item.Operation + " for " + item.EntityType + " " + item.EntityID)
 
 	if err := e.applyQueueItem(ctx, *item); err != nil {
+		e.setSyncStatus("push failed for queue item")
 		_ = e.repo.MarkSyncFailed(item.ID, err.Error())
 		return err
 	}
+	e.setSyncStatus("push completed for queue item")
 	return e.repo.MarkSyncDone(item.ID)
 }
 

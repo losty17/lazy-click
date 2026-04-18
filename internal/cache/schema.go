@@ -12,12 +12,15 @@ type SpaceEntity struct {
 }
 
 type ListEntity struct {
-	ID         string `gorm:"primaryKey;size:128"`
-	Provider   string `gorm:"index;size:32;not null"`
-	ExternalID string `gorm:"index;size:128;not null"`
-	SpaceID    string `gorm:"index;size:128;not null"`
-	Name       string `gorm:"size:256;not null"`
-	UpdatedAt  time.Time
+	ID             string `gorm:"primaryKey;size:128"`
+	Provider       string `gorm:"index;size:32;not null"`
+	ExternalID     string `gorm:"index;size:128;not null"`
+	SpaceID        string `gorm:"index;size:128;not null"`
+	Name           string `gorm:"size:256;not null"`
+	Favorite       bool   `gorm:"index;not null;default:false"`
+	LastOpenedUnix int64  `gorm:"index;not null;default:0"`
+	LastSyncedUnix int64  `gorm:"index;not null;default:0"`
+	UpdatedAt      time.Time
 }
 
 type TaskEntity struct {
@@ -25,6 +28,8 @@ type TaskEntity struct {
 	Provider         string `gorm:"index;size:32;not null"`
 	ExternalID       string `gorm:"index;size:128;not null"`
 	ListID           string `gorm:"index;size:128;not null"`
+	ParentTaskID     string `gorm:"index;size:128"`
+	IsSubtask        bool   `gorm:"index;not null;default:false"`
 	Title            string `gorm:"size:1024;not null"`
 	DescriptionMD    string `gorm:"type:text"`
 	Status           string `gorm:"index;size:64;not null"`
@@ -32,9 +37,17 @@ type TaskEntity struct {
 	PriorityLabel    string `gorm:"size:64"`
 	PriorityRank     int
 	DueAtUnixMS      *int64
+	AssigneesJSON    string `gorm:"type:text"`
 	CustomFieldsJSON string `gorm:"type:text"`
 	UpdatedAtUnix    int64  `gorm:"index"`
+	LastFetchedUnix  int64  `gorm:"index;not null;default:0"`
 	UpdatedAt        time.Time
+}
+
+type AppStateEntity struct {
+	Key       string `gorm:"primaryKey;size:128"`
+	Value     string `gorm:"type:text"`
+	UpdatedAt time.Time
 }
 
 type TagEntity struct {

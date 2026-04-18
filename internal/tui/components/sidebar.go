@@ -50,6 +50,20 @@ func (m SidebarModel) SelectedIndex() int {
 	return m.idx
 }
 
+func (m *SidebarModel) SetSelectedIndex(idx int) {
+	if len(m.items) == 0 {
+		m.idx = 0
+		return
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(m.items) {
+		idx = len(m.items) - 1
+	}
+	m.idx = idx
+}
+
 func (m *SidebarModel) MoveHorizontal(delta int) {
 	next := m.x + delta
 	if next < 0 {

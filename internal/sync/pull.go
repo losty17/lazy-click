@@ -10,6 +10,18 @@ import (
 )
 
 func (e *Engine) PullOnce(ctx context.Context) error {
+	if err := e.PullMetadataOnce(ctx); err != nil {
+		return err
+	}
+	activeList := e.ActiveListID()
+	if activeList == "" {
+		return nil
+	}
+	return e.PullListTasksOnce(ctx, activeList)
+}
+
+func (e *Engine) PullMetadataOnce(ctx context.Context) error {
+	e.setSyncStatus("fetching spaces")
 	spaces, err := e.provider.GetSpaces(ctx)
 	if err != nil {
 		return err
@@ -34,6 +46,7 @@ func (e *Engine) PullOnce(ctx context.Context) error {
 	)
 
 	for _, s := range spaces {
+		e.setSyncStatus("fetching lists for space " + s.ID)
 		lists, err := e.provider.GetLists(ctx, s.ID)
 		if err != nil {
 			errorCount++
@@ -57,28 +70,32 @@ func (e *Engine) PullOnce(ctx context.Context) error {
 			continue
 		}
 
-		for _, l := range lists {
-			tasks, err := e.provider.GetTasks(ctx, l.ID, provider.TaskFilter{IncludeClosed: true})
-			if err != nil {
-				errorCount++
-				lastErr = fmt.Errorf("list %s tasks failed: %w", l.ID, err)
-				continue
-			}
-
-			taskRows := make([]cache.TaskEntity, 0, len(tasks))
-			for _, t := range tasks {
-				taskRows = append(taskRows, mapTaskToEntity(t, l.ID))
-			}
-			if err := e.repo.SaveTasks(taskRows); err != nil {
-				errorCount++
-				lastErr = fmt.Errorf("list %s task save failed: %w", l.ID, err)
-				continue
-			}
-		}
 	}
 
 	if errorCount > 0 {
 		return fmt.Errorf("pull completed with %d partial errors (last: %v)", errorCount, lastErr)
+	}
+	return nil
+}
+
+func (e *Engine) PullListTasksOnce(ctx context.Context, listID string) error {
+	if listID == "" {
+		return nil
+	}
+	e.setSyncStatus("fetching tasks for list " + listID)
+	tasks, err := e.provider.GetTasks(ctx, listID, provider.TaskFilter{IncludeClosed: true})
+	if err != nil {
+		return fmt.Errorf("list %s tasks failed: %w", listID, err)
+	}
+	taskRows := make([]cache.TaskEntity, 0, len(tasks))
+	for _, t := range tasks {
+		taskRows = append(taskRows, mapTaskToEntity(t, listID))
+	}
+	if err := e.repo.SaveTasks(taskRows); err != nil {
+		return fmt.Errorf("list %s task save failed: %w", listID, err)
+	}
+	if err := e.repo.MarkListSynced(listID); err != nil {
+		return fmt.Errorf("list %s sync marker failed: %w", listID, err)
 	}
 	return nil
 }
@@ -89,6 +106,8 @@ func mapTaskToEntity(task provider.Task, listID string) cache.TaskEntity {
 		Provider:      task.Provider,
 		ExternalID:    task.ExternalID,
 		ListID:        listID,
+		ParentTaskID:  task.ParentTaskID,
+		IsSubtask:     task.IsSubtask,
 		Title:         task.Title,
 		DescriptionMD: task.DescriptionMD,
 		Status:        task.Status,
@@ -103,6 +122,11 @@ func mapTaskToEntity(task provider.Task, listID string) cache.TaskEntity {
 	if len(task.CustomFields) > 0 {
 		if b, err := json.Marshal(task.CustomFields); err == nil {
 			row.CustomFieldsJSON = string(b)
+		}
+	}
+	if len(task.Assignees) > 0 {
+		if b, err := json.Marshal(task.Assignees); err == nil {
+			row.AssigneesJSON = string(b)
 		}
 	}
 	return row

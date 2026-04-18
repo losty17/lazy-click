@@ -58,6 +58,7 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 - [x] Implement ClickUp client/auth skeleton (API token path completed; OAuth2/keyring pending).
 - [x] Implement ClickUp provider methods for spaces/lists/tasks.
 - [x] Implement pull sync (remote -> cache) scaffold.
+- [x] Refactor pull sync to metadata-first + active-list task pull (avoid first-run full task hydration).
 - [x] Implement push queue (cache -> remote) scaffold.
 - [x] Add conflict/sync-error model + handling policy scaffold.
 
@@ -75,6 +76,9 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 - [x] Implement comment creation flow (`AddComment` pipeline).
 - [x] Implement fuzzy find (`/`) across task fields.
 - [x] Implement optimistic updates + reconcile with provider (queue + periodic push cycle).
+- [x] Add sidebar list UX: list search, favorites, favorites-only filter, and persisted sort mode.
+- [x] Persist and restore last opened list and list-view preferences.
+- [x] Add lazy task detail revalidation on selection with debounce and loading states.
 - [ ] Add robust error surfacing in TUI.
 
 ## Cross-Cutting Quality Gates
@@ -113,3 +117,21 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 - Added cache-backed comment thread rendering in the detail panel.
 - Added comment compose flow on `c` (type, Enter submit, Esc cancel) with local save + queued provider push.
 - Added status filter UX on `f`, cycling through list-specific cached statuses (including ClickUp statuses).
+
+### 2026-04-17
+
+- Refactored sync pull strategy: each cycle now pulls spaces/lists metadata first and tasks only for the active/open list.
+- Added explicit per-list sync path for manual sync (`s`) so opened lists pull tasks on demand.
+- Added persisted list metadata and UI state in cache (favorite flag, last opened/synced timestamps, saved list preferences).
+- Added sidebar list enhancements: list search mode (`?`), favorite toggle (`*`), favorites-only toggle (`v`), and sort toggle (`o`, including most-recently-opened mode).
+- Implemented last-opened-list restoration on startup and active-list tracking for sync targeting.
+- Added lazy task detail revalidation with a generous debounce and loading indicator, using stale-while-revalidate behavior from cache.
+- Added dual task row highlighting in the table: selected task and currently displayed-detail task can coexist with distinct colors.
+- Added detailed sync phase/status text from the sync engine and surfaced it alongside the sync progress bar.
+- Added explicit refresh-current-task action (`R`) to revalidate the opened task immediately (without debounce).
+- Increased automatic background sync cadence to every 15 minutes and reset the next auto-sync window after manual sync.
+- Added assignee persistence in cache and surfaced assignees in both task table and detail panel.
+- Included subtasks in ClickUp list task pulls and displayed them as flat rows together with regular tasks.
+- Changed task open behavior so table cursor movement does not auto-open details; task details now open on `Enter`.
+- Added distinct cursor-vs-opened-task semantics in the table (green cursor row and orange opened-detail row).
+- Added a simple `~>` prefix indicator for subtasks in the task list.

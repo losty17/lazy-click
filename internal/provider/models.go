@@ -24,6 +24,9 @@ type Task struct {
 	ID            string
 	Provider      string
 	ExternalID    string
+	ListID        string
+	ParentTaskID  string
+	IsSubtask     bool
 	Title         string
 	DescriptionMD string
 	Status        string

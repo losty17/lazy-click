@@ -68,6 +68,7 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 			ID:            t.ID,
 			Provider:      "clickup",
 			ExternalID:    t.ID,
+			ListID:        listID,
 			Title:         t.Name,
 			DescriptionMD: t.Description,
 			Status:        t.Status.Status,
@@ -87,11 +88,23 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 				Color: t.Priority.Color,
 			}
 		}
+		if t.Parent != nil && *t.Parent != "" {
+			task.ParentTaskID = *t.Parent
+			task.IsSubtask = true
+		}
 		for _, tg := range t.Tags {
 			task.Tags = append(task.Tags, provider.Tag{
 				ID:    tg.Name,
 				Name:  tg.Name,
 				Color: tg.TagFg,
+			})
+		}
+		for _, assignee := range t.Assignees {
+			task.Assignees = append(task.Assignees, provider.User{
+				ID:       assignee.ID.String(),
+				Provider: "clickup",
+				Username: assignee.Username,
+				Email:    assignee.Email,
 			})
 		}
 		for _, cf := range t.CustomFields {
@@ -101,6 +114,62 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 		out = append(out, task)
 	}
 	return out, nil
+}
+
+func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, error) {
+	t, err := p.client.GetTask(ctx, taskID)
+	if err != nil {
+		return provider.Task{}, err
+	}
+
+	task := provider.Task{
+		ID:            t.ID,
+		Provider:      "clickup",
+		ExternalID:    t.ID,
+		ListID:        t.List.ID,
+		Title:         t.Name,
+		DescriptionMD: t.Description,
+		Status:        t.Status.Status,
+		CustomFields:  map[string]any{},
+	}
+	if t.DueDate != nil {
+		if parsedDue, parseErr := strconv.ParseInt(*t.DueDate, 10, 64); parseErr == nil {
+			task.DueAtUnixMS = &parsedDue
+		}
+	}
+	if t.Priority != nil {
+		rank, _ := strconv.Atoi(t.Priority.OrderIndex)
+		task.Priority = &provider.Priority{
+			Key:   t.Priority.OrderIndex,
+			Label: t.Priority.Priority,
+			Rank:  rank,
+			Color: t.Priority.Color,
+		}
+	}
+	if t.Parent != nil && *t.Parent != "" {
+		task.ParentTaskID = *t.Parent
+		task.IsSubtask = true
+	}
+	for _, tg := range t.Tags {
+		task.Tags = append(task.Tags, provider.Tag{
+			ID:    tg.Name,
+			Name:  tg.Name,
+			Color: tg.TagFg,
+		})
+	}
+	for _, assignee := range t.Assignees {
+		task.Assignees = append(task.Assignees, provider.User{
+			ID:       assignee.ID.String(),
+			Provider: "clickup",
+			Username: assignee.Username,
+			Email:    assignee.Email,
+		})
+	}
+	for _, cf := range t.CustomFields {
+		task.CustomFields[cf.Name] = cf.Value
+	}
+
+	return task, nil
 }
 
 func (p *Provider) UpdateTask(ctx context.Context, taskID string, data provider.TaskUpdate) (provider.Task, error) {
@@ -140,7 +209,7 @@ func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (
 		ID:     resp.ID,
 		TaskID: taskID,
 		Author: provider.User{
-			ID:       resp.User.ID,
+			ID:       resp.User.ID.String(),
 			Provider: "clickup",
 			Username: resp.User.Username,
 			Email:    resp.User.Email,

@@ -1,6 +1,41 @@
 package clickup
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
+
+type ClickUpID string
+
+func (id *ClickUpID) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*id = ""
+		return nil
+	}
+
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		*id = ClickUpID(s)
+		return nil
+	}
+
+	var n json.Number
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&n); err != nil {
+		return err
+	}
+	*id = ClickUpID(n.String())
+	return nil
+}
+
+func (id ClickUpID) String() string {
+	return string(id)
+}
 
 type GetTeamsResponse struct {
 	Teams []TeamDTO `json:"teams"`
@@ -49,6 +84,8 @@ type TaskDTO struct {
 	Status       TaskStatusDTO    `json:"status"`
 	Priority     *TaskPriorityDTO `json:"priority"`
 	DueDate      *string          `json:"due_date"`
+	Parent       *string          `json:"parent"`
+	Assignees    []UserDTO        `json:"assignees"`
 	Tags         []TagDTO         `json:"tags"`
 	CustomFields []CustomFieldDTO `json:"custom_fields"`
 	List         ListDTO          `json:"list"`
@@ -96,7 +133,7 @@ type AddCommentResponse struct {
 }
 
 type UserDTO struct {
-	ID       string `json:"id"`
-	Username string `json:"username"`
-	Email    string `json:"email"`
+	ID       ClickUpID `json:"id"`
+	Username string    `json:"username"`
+	Email    string    `json:"email"`
 }

@@ -7,19 +7,20 @@ import (
 )
 
 type TaskTableRow struct {
-	ID       string
-	ListID   string
-	Title    string
-	Status   string
-	Priority string
-	DueDate  string
-	Tags     string
+	ID        string
+	ListID    string
+	Title     string
+	Status    string
+	Priority  string
+	DueDate   string
+	Assignees string
 }
 
 type TaskTableModel struct {
-	rows []TaskTableRow
-	idx  int
-	x    int
+	rows            []TaskTableRow
+	idx             int
+	x               int
+	displayedTaskID string
 }
 
 func NewTaskTable() TaskTableModel {
@@ -70,6 +71,22 @@ func (m TaskTableModel) Selected() (TaskTableRow, bool) {
 	return m.rows[m.idx], true
 }
 
+func (m TaskTableModel) RowByID(taskID string) (TaskTableRow, bool) {
+	if taskID == "" {
+		return TaskTableRow{}, false
+	}
+	for _, row := range m.rows {
+		if row.ID == taskID {
+			return row, true
+		}
+	}
+	return TaskTableRow{}, false
+}
+
+func (m *TaskTableModel) SetDisplayedTaskID(taskID string) {
+	m.displayedTaskID = taskID
+}
+
 func (m TaskTableModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -80,6 +97,8 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	displayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166"))
+	selectedDisplayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("33")).Bold(true)
 	_ = active
 
 	const (
@@ -129,14 +148,14 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 			fitCell(row.Status, col[1]) + " | " +
 			fitCell(row.Priority, col[2]) + " | " +
 			fitCell(row.DueDate, col[3]) + " | " +
-			fitCell(row.Tags, col[4])
+			fitCell(row.Assignees, col[4])
 	}
 
 	headerLine := fitCell("Title", col[0]) + " | " +
 		fitCell("Status", col[1]) + " | " +
 		fitCell("Priority", col[2]) + " | " +
 		fitCell("Due Date", col[3]) + " | " +
-		fitCell("Tags", col[4])
+		fitCell("Assignees", col[4])
 
 	lines := []string{
 		titleStyle.Render(truncateToWidth(title, width)),
@@ -156,9 +175,18 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		row := m.rows[i]
 		prefix := "  "
 		style := lipgloss.NewStyle()
-		if i == m.idx {
+		isSelected := i == m.idx
+		isDisplayed := row.ID != "" && row.ID == m.displayedTaskID
+		if isSelected {
 			prefix = "> "
 			style = selectedStyle
+		}
+		if isDisplayed {
+			if isSelected {
+				style = selectedDisplayedStyle
+			} else {
+				style = displayedStyle
+			}
 		}
 		// lineWindow enables horizontal scrolling over wide rows.
 		line := prefix + format(row)

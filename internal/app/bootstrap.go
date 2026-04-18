@@ -37,7 +37,7 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 		statusLine = "ClickUp token not configured (set CLICKUP_API_TOKEN)"
 	} else {
 		clickupProvider := clickup.NewFromToken(token)
-		engine = syncengine.NewEngine(repo, clickupProvider, log.New(os.Stderr, "sync: ", log.LstdFlags), 20*time.Second)
+		engine = syncengine.NewEngine(repo, clickupProvider, log.New(os.Stderr, "sync: ", log.LstdFlags), 15*time.Minute)
 		statusLine = ""
 	}
 

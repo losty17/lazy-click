@@ -89,6 +89,7 @@ func (c *Client) GetLists(ctx context.Context, spaceID string) (*GetListsRespons
 func (c *Client) GetTasks(ctx context.Context, listID string, filter provider.TaskFilter) (*GetTasksResponse, error) {
 	values := url.Values{}
 	values.Set("include_closed", strconv.FormatBool(filter.IncludeClosed))
+	values.Set("subtasks", "true")
 	if len(filter.Statuses) > 0 {
 		for _, status := range filter.Statuses {
 			values.Add("statuses[]", status)

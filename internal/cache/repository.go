@@ -3,9 +3,11 @@ package cache
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Repository struct {
@@ -40,7 +42,10 @@ func (r *Repository) SaveLists(lists []ListEntity) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for _, list := range lists {
-			if err := tx.Save(&list).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"provider", "external_id", "space_id", "name"}),
+			}).Create(&list).Error; err != nil {
 				return err
 			}
 		}
@@ -52,14 +57,96 @@ func (r *Repository) SaveTasks(tasks []TaskEntity) error {
 	if len(tasks) == 0 {
 		return nil
 	}
+	now := time.Now().UnixMilli()
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for _, task := range tasks {
+			task.LastFetchedUnix = now
 			if err := tx.Save(&task).Error; err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func (r *Repository) MarkListOpened(listID string) error {
+	if listID == "" {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	return r.db.Model(&ListEntity{}).Where("id = ?", listID).Updates(map[string]any{
+		"last_opened_unix": now,
+		"updated_at":       time.Now(),
+	}).Error
+}
+
+func (r *Repository) MarkListSynced(listID string) error {
+	if listID == "" {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	return r.db.Model(&ListEntity{}).Where("id = ?", listID).Updates(map[string]any{
+		"last_synced_unix": now,
+		"updated_at":       time.Now(),
+	}).Error
+}
+
+func (r *Repository) ToggleListFavorite(listID string) error {
+	if listID == "" {
+		return nil
+	}
+	var list ListEntity
+	if err := r.db.Where("id = ?", listID).First(&list).Error; err != nil {
+		return err
+	}
+	return r.db.Model(&ListEntity{}).Where("id = ?", listID).Updates(map[string]any{
+		"favorite":   !list.Favorite,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+func (r *Repository) SetListFavorite(listID string, favorite bool) error {
+	if listID == "" {
+		return nil
+	}
+	return r.db.Model(&ListEntity{}).Where("id = ?", listID).Updates(map[string]any{
+		"favorite":   favorite,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+func (r *Repository) GetListByID(listID string) (*ListEntity, error) {
+	var list ListEntity
+	err := r.db.Where("id = ?", listID).First(&list).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &list, nil
+}
+
+func (r *Repository) SaveAppState(key string, value string) error {
+	if key == "" {
+		return fmt.Errorf("app state key is required")
+	}
+	return r.db.Save(&AppStateEntity{Key: key, Value: value}).Error
+}
+
+func (r *Repository) GetAppState(key string) (string, error) {
+	if key == "" {
+		return "", fmt.Errorf("app state key is required")
+	}
+	var row AppStateEntity
+	err := r.db.Where("key = ?", key).First(&row).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", nil
+		}
+		return "", err
+	}
+	return row.Value, nil
 }
 
 func (r *Repository) EnqueueSync(item SyncQueueEntity) error {

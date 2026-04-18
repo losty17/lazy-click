@@ -3,6 +3,7 @@ package syncengine
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"lazy-click/internal/cache"
@@ -14,6 +15,11 @@ type Engine struct {
 	provider provider.ProjectProvider
 	logger   *log.Logger
 	interval time.Duration
+
+	mu              sync.RWMutex
+	activeListID    string
+	syncStatus      string
+	resetAutoSyncCh chan struct{}
 }
 
 func NewEngine(repo *cache.Repository, provider provider.ProjectProvider, logger *log.Logger, interval time.Duration) *Engine {
@@ -21,33 +27,145 @@ func NewEngine(repo *cache.Repository, provider provider.ProjectProvider, logger
 		interval = 10 * time.Second
 	}
 	return &Engine{
-		repo:     repo,
-		provider: provider,
-		logger:   logger,
-		interval: interval,
+		repo:            repo,
+		provider:        provider,
+		logger:          logger,
+		interval:        interval,
+		syncStatus:      "idle",
+		resetAutoSyncCh: make(chan struct{}, 1),
 	}
 }
 
 func (e *Engine) Run(ctx context.Context) error {
-	ticker := time.NewTicker(e.interval)
-	defer ticker.Stop()
-
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
-		if err := e.Cycle(ctx); err != nil && e.logger != nil {
-			e.logger.Printf("sync cycle failed: %v", err)
-		}
-
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-timer.C:
+			if err := e.Cycle(ctx); err != nil && e.logger != nil {
+				e.logger.Printf("sync cycle failed: %v", err)
+			}
+			timer.Reset(e.interval)
+		case <-e.resetAutoSyncCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(e.interval)
 		}
 	}
 }
 
 func (e *Engine) Cycle(ctx context.Context) error {
-	if err := e.PullOnce(ctx); err != nil {
+	e.setSyncStatus("pulling metadata")
+	if err := e.PullMetadataOnce(ctx); err != nil {
+		e.setSyncStatus("metadata pull failed")
 		return err
 	}
-	return e.PushOnce(ctx)
+	active := e.ActiveListID()
+	if active != "" {
+		e.setSyncStatus("pulling tasks for active list " + active)
+		if err := e.PullListTasksOnce(ctx, active); err != nil {
+			e.setSyncStatus("active-list task pull failed")
+			return err
+		}
+	}
+	e.setSyncStatus("pushing pending mutations")
+	if err := e.PushOnce(ctx); err != nil {
+		e.setSyncStatus("push failed")
+		return err
+	}
+	e.setSyncStatus("idle")
+	return nil
+}
+
+func (e *Engine) SetActiveListID(listID string) {
+	e.mu.Lock()
+	e.activeListID = listID
+	e.mu.Unlock()
+}
+
+func (e *Engine) ActiveListID() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.activeListID
+}
+
+func (e *Engine) SyncList(ctx context.Context, listID string) error {
+	defer e.resetAutomaticSchedule()
+	e.setSyncStatus("pulling metadata")
+	if err := e.PullMetadataOnce(ctx); err != nil {
+		e.setSyncStatus("metadata pull failed")
+		return err
+	}
+	if listID != "" {
+		e.setSyncStatus("pulling tasks for selected list " + listID)
+		if err := e.PullListTasksOnce(ctx, listID); err != nil {
+			e.setSyncStatus("selected-list task pull failed")
+			return err
+		}
+	}
+	e.setSyncStatus("pushing pending mutations")
+	if err := e.PushOnce(ctx); err != nil {
+		e.setSyncStatus("push failed")
+		return err
+	}
+	e.setSyncStatus("idle")
+	return nil
+}
+
+func (e *Engine) RevalidateTask(ctx context.Context, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	e.setSyncStatus("revalidating task " + taskID)
+	task, err := e.provider.GetTask(ctx, taskID)
+	if err != nil {
+		e.setSyncStatus("task revalidate failed")
+		return err
+	}
+	if task.ListID == "" {
+		cached, cacheErr := e.repo.GetTaskByID(taskID)
+		if cacheErr != nil {
+			e.setSyncStatus("task revalidate failed")
+			return cacheErr
+		}
+		if cached == nil || cached.ListID == "" {
+			e.setSyncStatus("task revalidated")
+			return nil
+		}
+		task.ListID = cached.ListID
+	}
+	if err := e.repo.SaveTasks([]cache.TaskEntity{mapTaskToEntity(task, task.ListID)}); err != nil {
+		e.setSyncStatus("task revalidate failed")
+		return err
+	}
+	e.setSyncStatus("task revalidated")
+	return nil
+}
+
+func (e *Engine) SyncStatus() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.syncStatus == "" {
+		return "idle"
+	}
+	return e.syncStatus
+}
+
+func (e *Engine) setSyncStatus(status string) {
+	e.mu.Lock()
+	e.syncStatus = status
+	e.mu.Unlock()
+}
+
+func (e *Engine) resetAutomaticSchedule() {
+	select {
+	case e.resetAutoSyncCh <- struct{}{}:
+	default:
+	}
 }
