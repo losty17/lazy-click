@@ -1,0 +1,70 @@
+version: 2
+
+project_name: lazy-click
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lazy-click
+    main: ./cmd/lazy-click
+    binary: lazy-click
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - README.md
+      - .env.example
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: false
+  prerelease: auto
+
+brews:
+  - name: lazy-click
+    repository:
+      owner: losty17
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/losty17/lazy-click
+    description: High-performance Go TUI for project management systems.
+    license: GPL-3.0-only
+    install: |
+      bin.install "lazy-click"
+
+nfpms:
+  - id: linux-packages
+    package_name: lazy-click
+    vendor: losty17
+    homepage: https://github.com/losty17/lazy-click
+    maintainer: losty17 <noreply@users.noreply.github.com>
+    description: High-performance Go TUI for project management systems.
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    section: utils
+    priority: optional
+    contents:
+      - src: .env.example
+        dst: /usr/share/doc/lazy-click/.env.example
+        file_info:
+          mode: 0644
