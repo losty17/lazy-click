@@ -141,18 +141,10 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	}
 
 	format := func(row TaskTableRow) string {
-		return fitCell(row.Title, col[0]) + " | " +
-			fitCell(row.Status, col[1]) + " | " +
-			fitCell(row.Priority, col[2]) + " | " +
-			fitCell(row.DueDate, col[3]) + " | " +
-			fitCell(row.Assignees, col[4])
+		return row.Title + " | " + row.Status + " | " + row.Priority + " | " + row.DueDate + " | " + row.Assignees
 	}
 
-	headerLine := fitCell("Title", col[0]) + " | " +
-		fitCell("Status", col[1]) + " | " +
-		fitCell("Priority", col[2]) + " | " +
-		fitCell("Due Date", col[3]) + " | " +
-		fitCell("Assignees", col[4])
+	headerLine := "Title" + " | " + "Status" + " | " + "Priority" + " | " + "Due Date" + " | " + "Assignees"
 
 	lines := []string{
 		titleStyle.Render(lineWindow(title, width, m.x)),

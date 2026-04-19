@@ -542,8 +542,8 @@ func (m *RootModel) handleHorizontalMove(delta int) {
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
 	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
-	const verticalPaneGap = 1
-	const horizontalPaneGap = 3
+	const verticalPaneGap = 0
+	const horizontalPaneGap = 1
 
 	sidebarStyle := PanelStyle
 	if m.activePane == 0 {
@@ -633,8 +633,8 @@ func (m RootModel) View() string {
 func (m RootModel) layout() (int, int, int, int, int, int) {
 	hFrame := PanelStyle.GetHorizontalFrameSize()
 	vFrame := PanelStyle.GetVerticalFrameSize()
-	const verticalPaneGap = 1
-	const horizontalPaneGap = 3
+	const verticalPaneGap = 0
+	const horizontalPaneGap = 1
 
 	totalWidth := 78
 	if m.width > 0 {
@@ -651,12 +651,9 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	}
 
 	innerWidthBudget := max(totalWidth-(2*hFrame)-horizontalPaneGap, 2)
-	sidebarInnerWidth := innerWidthBudget / 3
+	sidebarInnerWidth := innerWidthBudget / 5
 	minSidebar := 8
-	maxSidebar := innerWidthBudget - 8
-	if maxSidebar < minSidebar {
-		maxSidebar = minSidebar
-	}
+	maxSidebar := max(innerWidthBudget - 8, minSidebar)
 	if sidebarInnerWidth < minSidebar {
 		sidebarInnerWidth = minSidebar
 	}
@@ -673,26 +670,15 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 		}
 	}
 
-	sidebarInnerHeight := bodyOuterHeight - vFrame
-	if sidebarInnerHeight < 1 {
-		sidebarInnerHeight = 1
-	}
+	sidebarInnerHeight := max(bodyOuterHeight - vFrame, 1)
 
-	rightInnerHeightBudget := bodyOuterHeight - (2 * vFrame) - verticalPaneGap
-	if rightInnerHeightBudget < 2 {
-		rightInnerHeightBudget = 2
-	}
-	tableInnerHeight := (rightInnerHeightBudget * 2) / 3
-	if tableInnerHeight < 1 {
-		tableInnerHeight = 1
-	}
+	rightInnerHeightBudget := max(bodyOuterHeight - (2 * vFrame) - verticalPaneGap, 2)
+	tableInnerHeight := max((rightInnerHeightBudget * 2) / 3, 1)
 	detailInnerHeight := rightInnerHeightBudget - tableInnerHeight
+
 	if detailInnerHeight < 1 {
 		detailInnerHeight = 1
-		tableInnerHeight = rightInnerHeightBudget - 1
-		if tableInnerHeight < 1 {
-			tableInnerHeight = 1
-		}
+		tableInnerHeight = max(rightInnerHeightBudget - 1, 1)
 	}
 
 	return totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight

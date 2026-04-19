@@ -79,7 +79,7 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	_ = active
-	lines := []string{headerStyle.Render(truncateText(header, width))} 
+	lines := []string{headerStyle.Render(lineWindow(header, width, m.x))} 
 
 	// Keep the selected item centered when possible and only render the visible slice.
 	bodySize := max(height - 1, 0)
@@ -92,9 +92,9 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 			prefix = "> "
 			style = selectedStyle
 		}
+
 		// lineWindow applies horizontal scrolling (m.x) while preserving fixed row width.
-		// lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
-		lines = append(lines, style.Render(truncateText(prefix+item, width))) 
+		lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x))) 
 	}
 
 	// Pad to the requested height so the panel always renders as a full rectangle.

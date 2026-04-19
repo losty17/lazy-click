@@ -45,24 +45,7 @@ func sanitizeLine(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
-	return strings.Join(strings.Fields(s), " ")
-}
-
-func fitCell(s string, width int) string {
 	return s
-
-	// if width <= 0 {
-	// 	return ""
-	// }
-	// // Force each cell to exactly width runes (truncate with ellipsis or pad with spaces).
-	// line := []rune(sanitizeLine(s))
-	// if len(line) > width {
-	// 	if width == 1 {
-	// 		return "…"
-	// 	}
-	// 	return string(line[:width-1]) + "…"
-	// }
-	// return string(line) + strings.Repeat(" ", width-len(line))
 }
 
 func lineWindow(s string, width int, offset int) string {
