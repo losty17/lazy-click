@@ -93,6 +93,7 @@ type TaskDTO struct {
 
 type TaskStatusDTO struct {
 	Status string `json:"status"`
+	Color  string `json:"color"`
 }
 
 type TaskPriorityDTO struct {

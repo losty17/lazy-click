@@ -306,6 +306,16 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.listSearchInput = m.listSearchQuery
 			m.listSearchBackup = m.listSearchQuery
 			return m, nil
+		case m.keymap.TaskTitle:
+			if m.activePane == 1 {
+				row, ok := m.taskTable.Selected()
+				if !ok {
+					m.statusLine = "No task selected"
+					return m, nil
+				}
+				m.statusLine = "Task title: " + row.Title
+				return m, nil
+			}
 		case m.keymap.SortLists:
 			if m.listSortMode == cache.ListSortMostRecentlyOpen {
 				m.listSortMode = cache.ListSortNameAsc
@@ -559,13 +569,13 @@ func (m RootModel) View() string {
 	}
 
 	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
-		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth - 4, sidebarInnerHeight),
+		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth-4, sidebarInnerHeight),
 	)
 	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
-		m.taskTable.Render(m.activePane == 1, rightInnerWidth - 2, tableInnerHeight),
+		m.taskTable.Render(m.activePane == 1, rightInnerWidth-2, tableInnerHeight),
 	)
 	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
-		m.detailPanel.Render(m.activePane == 2, rightInnerWidth - 2, detailInnerHeight),
+		m.detailPanel.Render(m.activePane == 2, rightInnerWidth-2, detailInnerHeight),
 	)
 
 	right := lipgloss.JoinVertical(
@@ -601,7 +611,7 @@ func (m RootModel) View() string {
 		taskSearch,
 	)
 
-	help := "Keys: hjkl/arrows move, / task search, ? list search, * favorite list, o sort lists, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, / task search, ? list search, t show task title, * favorite list, o sort lists, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.searchMode {
@@ -609,7 +619,7 @@ func (m RootModel) View() string {
 	} else if m.listSearchMode {
 		help = fmt.Sprintf("List search mode: %s (type to filter, Enter apply, Esc cancel)", m.listSearchInput)
 	} else {
-		help = "Keys: hjkl/arrows move cursor, Enter open task, / task search, ? list search, * favorite list, o sort lists, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: hjkl/arrows move cursor, Enter open task, / task search, ? list search, t show task title, * favorite list, o sort lists, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -653,7 +663,7 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	innerWidthBudget := max(totalWidth-(2*hFrame)-horizontalPaneGap, 2)
 	sidebarInnerWidth := innerWidthBudget / 5
 	minSidebar := 8
-	maxSidebar := max(innerWidthBudget - 8, minSidebar)
+	maxSidebar := max(innerWidthBudget-8, minSidebar)
 	if sidebarInnerWidth < minSidebar {
 		sidebarInnerWidth = minSidebar
 	}
@@ -670,15 +680,15 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 		}
 	}
 
-	sidebarInnerHeight := max(bodyOuterHeight - vFrame, 1)
+	sidebarInnerHeight := max(bodyOuterHeight-vFrame, 1)
 
-	rightInnerHeightBudget := max(bodyOuterHeight - (2 * vFrame) - verticalPaneGap, 2)
-	tableInnerHeight := max((rightInnerHeightBudget * 2) / 3, 1)
+	rightInnerHeightBudget := max(bodyOuterHeight-(2*vFrame)-verticalPaneGap, 2)
+	tableInnerHeight := max((rightInnerHeightBudget*2)/3, 1)
 	detailInnerHeight := rightInnerHeightBudget - tableInnerHeight
 
 	if detailInnerHeight < 1 {
 		detailInnerHeight = 1
-		tableInnerHeight = max(rightInnerHeightBudget - 1, 1)
+		tableInnerHeight = max(rightInnerHeightBudget-1, 1)
 	}
 
 	return totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight
@@ -1221,13 +1231,14 @@ func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
 			due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
 		}
 		rows = append(rows, components.TaskTableRow{
-			ID:        task.ID,
-			ListID:    task.ListID,
-			Title:     formatTaskTitle(task),
-			Status:    task.Status,
-			Priority:  priority,
-			DueDate:   due,
-			Assignees: formatAssignees(task.AssigneesJSON),
+			ID:          task.ID,
+			ListID:      task.ListID,
+			Title:       formatTaskTitle(task),
+			Status:      task.Status,
+			StatusColor: task.StatusColor,
+			Priority:    priority,
+			DueDate:     due,
+			Assignees:   formatAssignees(task.AssigneesJSON),
 		})
 	}
 	return rows

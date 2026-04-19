@@ -1,19 +1,21 @@
 package components
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 type TaskTableRow struct {
-	ID        string
-	ListID    string
-	Title     string
-	Status    string
-	Priority  string
-	DueDate   string
-	Assignees string
+	ID          string
+	ListID      string
+	Title       string
+	Status      string
+	StatusColor string
+	Priority    string
+	DueDate     string
+	Assignees   string
 }
 
 type TaskTableModel struct {
@@ -106,53 +108,50 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		sepWidth    = 3
 	)
 	sepCount := 4
-	usable := max(width - prefixWidth - (sepCount * sepWidth), 5)
-	// Column widths are proportional to base weights and then balanced to exact width.
-	base := []int{34, 14, 10, 10, 18}
-	baseTotal := 86
-	col := make([]int, len(base))
-	sum := 0
-	for i := range base {
-		col[i] = (base[i] * usable) / baseTotal
-		if col[i] < 1 {
-			col[i] = 1
-		}
-		sum += col[i]
+	weights := []int{42, 14, 10, 12, 22}
+	minCols := []int{12, 7, 7, 10, 10}
+	usable := max(width-prefixWidth-(sepCount*sepWidth), 1)
+	minUsable := 0
+	for _, w := range minCols {
+		minUsable += w
 	}
-	for sum < usable {
-		for _, i := range []int{0, 4, 1, 2, 3} {
-			if sum >= usable {
-				break
-			}
-			col[i]++
-			sum++
-		}
-	}
-	for sum > usable {
-		for _, i := range []int{0, 4, 1, 2, 3} {
-			if sum <= usable {
-				break
-			}
-			if col[i] > 1 {
-				col[i]--
-				sum--
-			}
-		}
+
+	col := fitColumns(usable, minCols, weights)
+	lineWidth := width
+	if usable < minUsable {
+		col = append([]int(nil), minCols...)
+		lineWidth = prefixWidth + (sepCount * sepWidth) + minUsable
 	}
 
 	format := func(row TaskTableRow) string {
-		return row.Title + " | " + row.Status + " | " + row.Priority + " | " + row.DueDate + " | " + row.Assignees
+		parts := []string{
+			fitCell(row.Title, col[0]),
+			fitCell(strings.ToUpper(row.Status), col[1]),
+			fitCell(row.Priority, col[2]),
+			fitCell(row.DueDate, col[3]),
+			fitCell(row.Assignees, col[4]),
+		}
+		return strings.Join(parts, " | ")
 	}
 
-	headerLine := "Title" + " | " + "Status" + " | " + "Priority" + " | " + "Due Date" + " | " + "Assignees"
+	headerLine := "  " + strings.Join([]string{
+		fitCell("Title", col[0]),
+		fitCell("Status", col[1]),
+		fitCell("Priority", col[2]),
+		fitCell("Due Date", col[3]),
+		fitCell("Assignees", col[4]),
+	}, " | ")
 
-	lines := []string{
-		titleStyle.Render(lineWindow(title, width, m.x)),
-		headerStyle.Render(lineWindow(headerLine, width, m.x)),
+	xOffset := m.xForWidth(lineWidth, width)
+	lines := []string{titleStyle.Render(lineWindow(title, width, 0))}
+	if lineWidth > width {
+		lines = append(lines, headerStyle.Render(lineWindow(headerLine, width, xOffset)))
+	} else {
+		lines = append(lines, headerStyle.Render(headerLine))
 	}
 
 	// Body viewport excludes title/header lines.
-	bodySize := max(height - 2, 0)
+	bodySize := max(height-2, 0)
 	if len(m.rows) == 0 {
 		lines = append(lines, lineWindow("  No tasks available for selected list", width, 0))
 	}
@@ -174,9 +173,29 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 				style = displayedStyle
 			}
 		}
-		// lineWindow enables horizontal scrolling over wide rows.
-		line := prefix + format(row)
-		lines = append(lines, style.Render(lineWindow(line, width, m.x)))
+		if lineWidth > width {
+			line := prefix + format(row)
+			lines = append(lines, style.Render(lineWindow(line, width, xOffset)))
+			continue
+		}
+
+		titleCell := fitCell(row.Title, col[0])
+		statusCell := fitCell(strings.ToUpper(row.Status), col[1])
+		priorityCell := fitCell(row.Priority, col[2])
+		dueDateCell := fitCell(row.DueDate, col[3])
+		assigneesCell := fitCell(row.Assignees, col[4])
+
+		statusStyle := statusCellStyle(row.StatusColor)
+		if isSelected && isDisplayed {
+			statusStyle = statusStyle.Bold(true)
+		}
+
+		line := strings.Join([]string{
+			style.Render(prefix + titleCell + " | "),
+			statusStyle.Render(statusCell),
+			style.Render(" | " + priorityCell + " | " + dueDateCell + " | " + assigneesCell),
+		}, "")
+		lines = append(lines, line)
 	}
 
 	// Fill trailing rows so panel height stays stable when item count is small.
@@ -185,4 +204,130 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func fitColumns(usable int, minCols []int, weights []int) []int {
+	cols := append([]int(nil), minCols...)
+	if usable <= 0 || len(cols) == 0 {
+		return cols
+	}
+	minTotal := 0
+	for _, w := range minCols {
+		minTotal += w
+	}
+	if usable <= minTotal {
+		return cols
+	}
+
+	extra := usable - minTotal
+	weightTotal := 0
+	for _, w := range weights {
+		if w > 0 {
+			weightTotal += w
+		}
+	}
+	if weightTotal <= 0 {
+		weightTotal = len(cols)
+		weights = make([]int, len(cols))
+		for i := range weights {
+			weights[i] = 1
+		}
+	}
+
+	usedExtra := 0
+	for i := range cols {
+		gain := (weights[i] * extra) / weightTotal
+		cols[i] += gain
+		usedExtra += gain
+	}
+
+	for usedExtra < extra {
+		for _, i := range []int{0, 4, 1, 3, 2} {
+			if usedExtra >= extra {
+				break
+			}
+			cols[i]++
+			usedExtra++
+		}
+	}
+
+	return cols
+}
+
+func fitCell(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) > width {
+		if width <= 3 {
+			return strings.Repeat(".", width)
+		}
+		value = string(runes[:width-3]) + "..."
+	}
+	cell := value
+	cellRunes := []rune(cell)
+	if len(cellRunes) < width {
+		cell += strings.Repeat(" ", width-len(cellRunes))
+	}
+	return cell
+}
+
+func (m TaskTableModel) xForWidth(lineWidth int, viewportWidth int) int {
+	if viewportWidth <= 0 || lineWidth <= viewportWidth {
+		return 0
+	}
+	maxOffset := lineWidth - viewportWidth
+	if m.x < 0 {
+		return 0
+	}
+	if m.x > maxOffset {
+		return maxOffset
+	}
+	return m.x
+}
+
+func statusCellStyle(rawHex string) lipgloss.Style {
+	bg, ok := normalizeHexColor(rawHex)
+	if !ok {
+		return lipgloss.NewStyle()
+	}
+	fg := contrastColor(bg)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(fg)).Background(lipgloss.Color(bg))
+}
+
+func normalizeHexColor(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", false
+	}
+	if strings.HasPrefix(s, "#") {
+		s = s[1:]
+	}
+	if len(s) == 3 {
+		s = strings.Repeat(string(s[0]), 1) + strings.Repeat(string(s[0]), 1) +
+			strings.Repeat(string(s[1]), 1) + strings.Repeat(string(s[1]), 1) +
+			strings.Repeat(string(s[2]), 1) + strings.Repeat(string(s[2]), 1)
+	}
+	if len(s) != 6 {
+		return "", false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return "", false
+		}
+	}
+	return "#" + strings.ToUpper(s), true
+}
+
+func contrastColor(hex string) string {
+	s := strings.TrimPrefix(hex, "#")
+	r, _ := strconv.ParseUint(s[0:2], 16, 8)
+	g, _ := strconv.ParseUint(s[2:4], 16, 8)
+	b, _ := strconv.ParseUint(s[4:6], 16, 8)
+	brightness := (299*int(r) + 587*int(g) + 114*int(b)) / 1000
+	if brightness >= 140 {
+		return "#111111"
+	}
+	return "#FFFFFF"
 }

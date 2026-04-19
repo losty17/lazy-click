@@ -33,6 +33,7 @@ type TaskEntity struct {
 	Title            string `gorm:"size:1024;not null"`
 	DescriptionMD    string `gorm:"type:text"`
 	Status           string `gorm:"index;size:64;not null"`
+	StatusColor      string `gorm:"size:16"`
 	PriorityKey      string `gorm:"size:32"`
 	PriorityLabel    string `gorm:"size:64"`
 	PriorityRank     int

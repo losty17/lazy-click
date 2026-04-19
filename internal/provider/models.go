@@ -30,6 +30,7 @@ type Task struct {
 	Title         string
 	DescriptionMD string
 	Status        string
+	StatusColor   string
 	Priority      *Priority
 	DueAtUnixMS   *int64
 	Assignees     []User

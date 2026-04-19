@@ -72,6 +72,7 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 			Title:         t.Name,
 			DescriptionMD: t.Description,
 			Status:        t.Status.Status,
+			StatusColor:   t.Status.Color,
 			CustomFields:  map[string]any{},
 		}
 		if t.DueDate != nil {
@@ -130,6 +131,7 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 		Title:         t.Name,
 		DescriptionMD: t.Description,
 		Status:        t.Status.Status,
+		StatusColor:   t.Status.Color,
 		CustomFields:  map[string]any{},
 	}
 	if t.DueDate != nil {
