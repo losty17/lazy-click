@@ -2,19 +2,6 @@ package components
 
 import "strings"
 
-func truncateToWidth(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(r[:width-1]) + "…"
-}
 
 func RenderMarkdownLines(markdown string) []string {
 	if strings.TrimSpace(markdown) == "" {
@@ -62,18 +49,20 @@ func sanitizeLine(s string) string {
 }
 
 func fitCell(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	// Force each cell to exactly width runes (truncate with ellipsis or pad with spaces).
-	line := []rune(sanitizeLine(s))
-	if len(line) > width {
-		if width == 1 {
-			return "…"
-		}
-		return string(line[:width-1]) + "…"
-	}
-	return string(line) + strings.Repeat(" ", width-len(line))
+	return s
+
+	// if width <= 0 {
+	// 	return ""
+	// }
+	// // Force each cell to exactly width runes (truncate with ellipsis or pad with spaces).
+	// line := []rune(sanitizeLine(s))
+	// if len(line) > width {
+	// 	if width == 1 {
+	// 		return "…"
+	// 	}
+	// 	return string(line[:width-1]) + "…"
+	// }
+	// return string(line) + strings.Repeat(" ", width-len(line))
 }
 
 func lineWindow(s string, width int, offset int) string {
@@ -82,16 +71,17 @@ func lineWindow(s string, width int, offset int) string {
 	}
 	// Return a fixed-width horizontal viewport into a long line.
 	line := []rune(sanitizeLine(s))
+
 	if offset < 0 {
 		offset = 0
 	}
+
 	if offset > len(line) {
 		offset = len(line)
 	}
-	end := offset + width
-	if end > len(line) {
-		end = len(line)
-	}
+
+	end := min(offset + width, len(line))
+
 	window := string(line[offset:end])
 	windowRunes := []rune(window)
 	if len(windowRunes) < width {

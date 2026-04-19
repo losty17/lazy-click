@@ -56,10 +56,10 @@ func (m DetailModel) Render(active bool, width int, height int) string {
 	title := "Detail"
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	_ = active
-	lines := []string{titleStyle.Render(truncateToWidth(title, width))}
+	lines := []string{titleStyle.Render(truncateText(title, width))}
 
 	// Expand logical sections into one flat list of renderable lines.
-	bodyLines := m.expandedLines(width - 2) // account for horizontal padding
+	bodyLines := m.expandedLines(width)
 
 	bodySize := max(height - 1, 0)
 	start := max(m.idx, 0)
@@ -94,6 +94,7 @@ func (m DetailModel) expandedLines(width int) []string {
 	for _, section := range m.sections {
 		normalized := strings.ReplaceAll(section, "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
+
 		parts := strings.Split(normalized, "\n")
 
 		if len(parts) == 0 {
@@ -117,8 +118,12 @@ func breakLines(s string, width int) []string {
 
 	lines := []string{}
 	for len(s) > width {
-		lines = append(lines, s[:width])
-		s = s[width:]
+		breakPoint := strings.LastIndex(s[:width], " ")
+		if breakPoint == -1 {
+			breakPoint = width
+		}
+		lines = append(lines, strings.Trim(s[:breakPoint], " "))
+		s = s[breakPoint:]
 	}
 
 	s = strings.Trim(s, " ")

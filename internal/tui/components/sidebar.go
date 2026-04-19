@@ -65,10 +65,7 @@ func (m *SidebarModel) SetSelectedIndex(idx int) {
 }
 
 func (m *SidebarModel) MoveHorizontal(delta int) {
-	next := m.x + delta
-	if next < 0 {
-		next = 0
-	}
+	next := max(m.x + delta, 0)
 	m.x = next
 }
 
@@ -82,13 +79,10 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	_ = active
-	lines := []string{headerStyle.Render(truncateToWidth(header, width))}
+	lines := []string{headerStyle.Render(truncateText(header, width))} 
 
 	// Keep the selected item centered when possible and only render the visible slice.
-	bodySize := height - 1
-	if bodySize < 0 {
-		bodySize = 0
-	}
+	bodySize := max(height - 1, 0)
 	start, end := visibleWindow(len(m.items), m.idx, bodySize)
 	for i := start; i < end; i++ {
 		item := m.items[i]
@@ -99,7 +93,8 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 			style = selectedStyle
 		}
 		// lineWindow applies horizontal scrolling (m.x) while preserving fixed row width.
-		lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
+		// lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
+		lines = append(lines, style.Render(truncateText(prefix+item, width))) 
 	}
 
 	// Pad to the requested height so the panel always renders as a full rectangle.
@@ -108,4 +103,14 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func truncateText(s string, width int) string {
+	if len(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return s[:width]
+	}
+	return s[:width-3] + "..."
 }

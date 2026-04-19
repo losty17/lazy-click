@@ -106,10 +106,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		sepWidth    = 3
 	)
 	sepCount := 4
-	usable := width - prefixWidth - (sepCount * sepWidth)
-	if usable < 5 {
-		usable = 5
-	}
+	usable := max(width - prefixWidth - (sepCount * sepWidth), 5)
 	// Column widths are proportional to base weights and then balanced to exact width.
 	base := []int{34, 14, 10, 10, 18}
 	baseTotal := 86
@@ -158,15 +155,12 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		fitCell("Assignees", col[4])
 
 	lines := []string{
-		titleStyle.Render(truncateToWidth(title, width)),
+		titleStyle.Render(lineWindow(title, width, m.x)),
 		headerStyle.Render(lineWindow(headerLine, width, m.x)),
 	}
 
 	// Body viewport excludes title/header lines.
-	bodySize := height - 2
-	if bodySize < 0 {
-		bodySize = 0
-	}
+	bodySize := max(height - 2, 0)
 	if len(m.rows) == 0 {
 		lines = append(lines, lineWindow("  No tasks available for selected list", width, 0))
 	}

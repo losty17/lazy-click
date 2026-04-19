@@ -559,13 +559,13 @@ func (m RootModel) View() string {
 	}
 
 	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
-		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth, sidebarInnerHeight),
+		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth - 4, sidebarInnerHeight),
 	)
 	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
-		m.taskTable.Render(m.activePane == 1, rightInnerWidth, tableInnerHeight),
+		m.taskTable.Render(m.activePane == 1, rightInnerWidth - 2, tableInnerHeight),
 	)
 	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
-		m.detailPanel.Render(m.activePane == 2, rightInnerWidth, detailInnerHeight),
+		m.detailPanel.Render(m.activePane == 2, rightInnerWidth - 2, detailInnerHeight),
 	)
 
 	right := lipgloss.JoinVertical(
