@@ -37,6 +37,8 @@ type TaskEntity struct {
 	PriorityKey      string `gorm:"size:32"`
 	PriorityLabel    string `gorm:"size:64"`
 	PriorityRank     int
+	PriorityColor    string `gorm:"size:16"`
+	EstimateMS       *int64
 	DueAtUnixMS      *int64
 	AssigneesJSON    string `gorm:"type:text"`
 	CustomFieldsJSON string `gorm:"type:text"`

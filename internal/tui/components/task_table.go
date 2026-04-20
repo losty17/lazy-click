@@ -14,6 +14,7 @@ type TaskTableRow struct {
 	Status      string
 	StatusColor string
 	Priority    string
+	Estimate    string
 	DueDate     string
 	Assignees   string
 }
@@ -107,9 +108,9 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		prefixWidth = 2
 		sepWidth    = 3
 	)
-	sepCount := 4
-	weights := []int{42, 14, 10, 12, 22}
-	minCols := []int{12, 7, 7, 10, 10}
+	sepCount := 5
+	weights := []int{34, 13, 14, 10, 10, 19}
+	minCols := []int{12, 7, 9, 10, 8, 10}
 	usable := max(width-prefixWidth-(sepCount*sepWidth), 1)
 	minUsable := 0
 	for _, w := range minCols {
@@ -127,9 +128,10 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		parts := []string{
 			fitCell(row.Title, col[0]),
 			fitCell(strings.ToUpper(row.Status), col[1]),
-			fitCell(row.Priority, col[2]),
+			fitCell(priorityCellText(row.Priority), col[2]),
 			fitCell(row.DueDate, col[3]),
-			fitCell(row.Assignees, col[4]),
+			fitCell(row.Estimate, col[4]),
+			fitCell(row.Assignees, col[5]),
 		}
 		return strings.Join(parts, " | ")
 	}
@@ -139,7 +141,8 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		fitCell("Status", col[1]),
 		fitCell("Priority", col[2]),
 		fitCell("Due Date", col[3]),
-		fitCell("Assignees", col[4]),
+		fitCell("Estimate", col[4]),
+		fitCell("Assignees", col[5]),
 	}, " | ")
 
 	xOffset := m.xForWidth(lineWidth, width)
@@ -181,19 +184,24 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 
 		titleCell := fitCell(row.Title, col[0])
 		statusCell := fitCell(strings.ToUpper(row.Status), col[1])
-		priorityCell := fitCell(row.Priority, col[2])
+		priorityCell := fitCell(priorityCellText(row.Priority), col[2])
 		dueDateCell := fitCell(row.DueDate, col[3])
-		assigneesCell := fitCell(row.Assignees, col[4])
+		estimateCell := fitCell(row.Estimate, col[4])
+		assigneesCell := fitCell(row.Assignees, col[5])
 
 		statusStyle := statusCellStyle(row.StatusColor)
+		priorityStyle := priorityCellStyle(row.Priority)
 		if isSelected && isDisplayed {
 			statusStyle = statusStyle.Bold(true)
+			priorityStyle = priorityStyle.Bold(true)
 		}
 
 		line := strings.Join([]string{
 			style.Render(prefix + titleCell + " | "),
 			statusStyle.Render(statusCell),
-			style.Render(" | " + priorityCell + " | " + dueDateCell + " | " + assigneesCell),
+			style.Render(" | "),
+			priorityStyle.Render(priorityCell),
+			style.Render(" | " + dueDateCell + " | " + estimateCell + " | " + assigneesCell),
 		}, "")
 		lines = append(lines, line)
 	}
@@ -242,7 +250,7 @@ func fitColumns(usable int, minCols []int, weights []int) []int {
 	}
 
 	for usedExtra < extra {
-		for _, i := range []int{0, 4, 1, 3, 2} {
+		for _, i := range []int{0, 5, 2, 1, 3, 4} {
 			if usedExtra >= extra {
 				break
 			}
@@ -294,6 +302,29 @@ func statusCellStyle(rawHex string) lipgloss.Style {
 	}
 	fg := contrastColor(bg)
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(fg)).Background(lipgloss.Color(bg))
+}
+
+func priorityCellText(label string) string {
+	trimmed := strings.TrimSpace(label)
+	if trimmed == "" || trimmed == "-" {
+		return "-"
+	}
+	return "⚑ " + strings.ToLower(trimmed)
+}
+
+func priorityCellStyle(label string) lipgloss.Style {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "urgent":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	case "high":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	case "normal":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	case "low":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	default:
+		return lipgloss.NewStyle()
+	}
 }
 
 func normalizeHexColor(raw string) (string, bool) {

@@ -27,6 +27,24 @@ const (
 	detailDebounceDelay = 3 * time.Second
 )
 
+type TaskSortMode string
+
+const (
+	TaskSortPriority TaskSortMode = "priority"
+	TaskSortName     TaskSortMode = "name"
+	TaskSortStatus   TaskSortMode = "status"
+	TaskSortAssignee TaskSortMode = "assignee"
+	TaskSortDueDate  TaskSortMode = "due"
+)
+
+type TaskGroupMode string
+
+const (
+	TaskGroupNone     TaskGroupMode = "none"
+	TaskGroupStatus   TaskGroupMode = "status"
+	TaskGroupAssignee TaskGroupMode = "assignee"
+)
+
 type SyncQueuer interface {
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
 	QueueAddComment(taskID string, text string) error
@@ -38,19 +56,21 @@ type SyncQueuer interface {
 }
 
 type RootModel struct {
-	width       int
-	height      int
-	keymap      Keymap
-	activePane  int
-	repo        *cache.Repository
-	sync        SyncQueuer
-	provider    string
-	statusLine  string
-	lists       []cache.ListEntity
-	sidebar     components.SidebarModel
-	taskTable   components.TaskTableModel
-	detailPanel components.DetailModel
-	statuses    []string
+	width         int
+	height        int
+	keymap        Keymap
+	activePane    int
+	repo          *cache.Repository
+	sync          SyncQueuer
+	provider      string
+	statusLine    string
+	lists         []cache.ListEntity
+	sidebar       components.SidebarModel
+	taskTable     components.TaskTableModel
+	detailPanel   components.DetailModel
+	statuses      []string
+	taskSortMode  TaskSortMode
+	taskGroupMode TaskGroupMode
 
 	statusFilter string
 	searchMode   bool
@@ -137,6 +157,8 @@ func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, providerName 
 		taskTable:     components.NewTaskTable(),
 		detailPanel:   components.NewDetail(),
 		listSortMode:  cache.ListSortNameAsc,
+		taskSortMode:  TaskSortPriority,
+		taskGroupMode: TaskGroupNone,
 		favoritesOnly: false,
 	}
 }
@@ -324,6 +346,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.saveListPrefs()
 			m.statusLine = "List sort: " + string(m.listSortMode)
+			return m, m.loadDataCmd()
+		case m.keymap.SortTasks:
+			m.cycleTaskSort(1)
+			return m, m.loadDataCmd()
+		case m.keymap.GroupTasks:
+			m.cycleTaskGroup(1)
 			return m, m.loadDataCmd()
 		case m.keymap.FavOnly:
 			m.favoritesOnly = !m.favoritesOnly
@@ -602,16 +630,18 @@ func (m RootModel) View() string {
 		listSearch = m.listSearchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s | List sort: %s | Favorites-only: %t | List search: %s | Task status: %s | Task search: %s",
+		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Favorites-only: %t | List search: %s | Task status: %s | Task search: %s",
 		m.provider,
 		m.listSortMode,
+		m.taskSortMode,
+		m.taskGroupMode,
 		m.favoritesOnly,
 		listSearch,
 		statusFilter,
 		taskSearch,
 	)
 
-	help := "Keys: hjkl/arrows move, / task search, ? list search, t show task title, * favorite list, o sort lists, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.searchMode {
@@ -619,7 +649,7 @@ func (m RootModel) View() string {
 	} else if m.listSearchMode {
 		help = fmt.Sprintf("List search mode: %s (type to filter, Enter apply, Esc cancel)", m.listSearchInput)
 	} else {
-		help = "Keys: hjkl/arrows move cursor, Enter open task, / task search, ? list search, t show task title, * favorite list, o sort lists, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: hjkl/arrows move cursor, Enter open task, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -706,6 +736,8 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	hydrated := m.stateHydrated
 	statusFilter := m.statusFilter
 	taskSearch := m.searchQuery
+	taskSortMode := m.taskSortMode
+	taskGroupMode := m.taskGroupMode
 
 	return func() tea.Msg {
 		msg := dataLoadedMsg{}
@@ -779,6 +811,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			return dataLoadedMsg{err: err}
 		}
 		tasks = fuzzyFindTasks(tasks, taskSearch)
+		tasks = organizeTasks(tasks, taskSortMode, taskGroupMode)
 
 		statuses, err := m.repo.GetTaskStatusesByList(selectedListID)
 		if err != nil {
@@ -1098,6 +1131,40 @@ func (m *RootModel) cycleStatusFilter(step int) {
 	}
 }
 
+func (m *RootModel) cycleTaskSort(step int) {
+	options := []TaskSortMode{TaskSortPriority, TaskSortName, TaskSortStatus, TaskSortAssignee, TaskSortDueDate}
+	current := 0
+	for i, mode := range options {
+		if mode == m.taskSortMode {
+			current = i
+			break
+		}
+	}
+	next := (current + step) % len(options)
+	if next < 0 {
+		next += len(options)
+	}
+	m.taskSortMode = options[next]
+	m.statusLine = "Task sort: " + string(m.taskSortMode)
+}
+
+func (m *RootModel) cycleTaskGroup(step int) {
+	options := []TaskGroupMode{TaskGroupNone, TaskGroupStatus, TaskGroupAssignee}
+	current := 0
+	for i, mode := range options {
+		if mode == m.taskGroupMode {
+			current = i
+			break
+		}
+	}
+	next := (current + step) % len(options)
+	if next < 0 {
+		next += len(options)
+	}
+	m.taskGroupMode = options[next]
+	m.statusLine = "Task group: " + string(m.taskGroupMode)
+}
+
 func (m RootModel) syncTickCmd() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
 		return syncTickMsg{}
@@ -1237,6 +1304,7 @@ func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
 			Status:      task.Status,
 			StatusColor: task.StatusColor,
 			Priority:    priority,
+			Estimate:    formatEstimate(task.EstimateMS),
 			DueDate:     due,
 			Assignees:   formatAssignees(task.AssigneesJSON),
 		})
@@ -1246,9 +1314,28 @@ func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
 
 func formatTaskTitle(task cache.TaskEntity) string {
 	if task.IsSubtask {
-		return "~> " + task.Title
+		return "   -> " + task.Title
 	}
 	return task.Title
+}
+
+func formatEstimate(estimateMS *int64) string {
+	if estimateMS == nil || *estimateMS <= 0 {
+		return "-"
+	}
+	seconds := *estimateMS / 1000
+	hours := seconds / 3600
+	minutes := (seconds % 3600) / 60
+	if hours > 0 && minutes > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm", minutes)
+	}
+	return "<1m"
 }
 
 func formatAssignees(raw string) string {
@@ -1308,6 +1395,199 @@ func fuzzyFindTasks(tasks []cache.TaskEntity, query string) []cache.TaskEntity {
 		out = append(out, item.task)
 	}
 	return out
+}
+
+func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, groupMode TaskGroupMode) []cache.TaskEntity {
+	if len(tasks) <= 1 {
+		return tasks
+	}
+
+	ordered := append([]cache.TaskEntity(nil), tasks...)
+	sort.SliceStable(ordered, func(i int, j int) bool {
+		groupI := taskGroupKey(ordered[i], groupMode)
+		groupJ := taskGroupKey(ordered[j], groupMode)
+		if groupI != groupJ {
+			return groupI < groupJ
+		}
+		return taskLess(ordered[i], ordered[j], sortMode)
+	})
+
+	return placeSubtasksAfterParents(ordered)
+}
+
+func taskGroupKey(task cache.TaskEntity, mode TaskGroupMode) string {
+	switch mode {
+	case TaskGroupStatus:
+		status := strings.TrimSpace(strings.ToLower(task.Status))
+		if status == "" {
+			return "~"
+		}
+		return status
+	case TaskGroupAssignee:
+		assignee := strings.TrimSpace(strings.ToLower(primaryAssignee(task.AssigneesJSON)))
+		if assignee == "" {
+			return "~"
+		}
+		return assignee
+	default:
+		return ""
+	}
+}
+
+func taskLess(a cache.TaskEntity, b cache.TaskEntity, mode TaskSortMode) bool {
+	switch mode {
+	case TaskSortName:
+		return compareStrings(a.Title, b.Title)
+	case TaskSortStatus:
+		if compareStrings(a.Status, b.Status) {
+			return true
+		}
+		if compareStrings(b.Status, a.Status) {
+			return false
+		}
+		return compareStrings(a.Title, b.Title)
+	case TaskSortAssignee:
+		assigneeA := primaryAssignee(a.AssigneesJSON)
+		assigneeB := primaryAssignee(b.AssigneesJSON)
+		if compareStrings(assigneeA, assigneeB) {
+			return true
+		}
+		if compareStrings(assigneeB, assigneeA) {
+			return false
+		}
+		return compareStrings(a.Title, b.Title)
+	case TaskSortDueDate:
+		return dueDateLess(a.DueAtUnixMS, b.DueAtUnixMS, a.Title, b.Title)
+	default:
+		return priorityLess(a, b)
+	}
+}
+
+func compareStrings(a string, b string) bool {
+	aNorm := strings.ToLower(strings.TrimSpace(a))
+	bNorm := strings.ToLower(strings.TrimSpace(b))
+	if aNorm == "" && bNorm != "" {
+		return false
+	}
+	if bNorm == "" && aNorm != "" {
+		return true
+	}
+	return aNorm < bNorm
+}
+
+func dueDateLess(a *int64, b *int64, aTitle string, bTitle string) bool {
+	if a == nil && b != nil {
+		return false
+	}
+	if b == nil && a != nil {
+		return true
+	}
+	if a != nil && b != nil {
+		if *a != *b {
+			return *a < *b
+		}
+	}
+	return compareStrings(aTitle, bTitle)
+}
+
+func priorityLess(a cache.TaskEntity, b cache.TaskEntity) bool {
+	rankA := prioritySortRank(a)
+	rankB := prioritySortRank(b)
+	if rankA != rankB {
+		return rankA < rankB
+	}
+	return compareStrings(a.Title, b.Title)
+}
+
+func prioritySortRank(task cache.TaskEntity) int {
+	label := strings.ToLower(strings.TrimSpace(task.PriorityLabel))
+	switch label {
+	case "urgent":
+		return 1
+	case "high":
+		return 2
+	case "normal":
+		return 3
+	case "low":
+		return 4
+	}
+	if task.PriorityRank > 0 {
+		return task.PriorityRank
+	}
+	return 99
+}
+
+func primaryAssignee(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return ""
+	}
+	var assignees []provider.User
+	if err := json.Unmarshal([]byte(raw), &assignees); err != nil || len(assignees) == 0 {
+		return ""
+	}
+	for _, a := range assignees {
+		if strings.TrimSpace(a.Username) != "" {
+			return a.Username
+		}
+		if strings.TrimSpace(a.Email) != "" {
+			return a.Email
+		}
+	}
+	return ""
+}
+
+func placeSubtasksAfterParents(tasks []cache.TaskEntity) []cache.TaskEntity {
+	if len(tasks) <= 1 {
+		return tasks
+	}
+
+	byID := make(map[string]cache.TaskEntity, len(tasks))
+	children := make(map[string][]cache.TaskEntity)
+	roots := make([]cache.TaskEntity, 0, len(tasks))
+
+	for _, task := range tasks {
+		if task.ID != "" {
+			byID[task.ID] = task
+		}
+	}
+
+	for _, task := range tasks {
+		if task.IsSubtask && task.ParentTaskID != "" && task.ParentTaskID != task.ID {
+			if _, ok := byID[task.ParentTaskID]; ok {
+				children[task.ParentTaskID] = append(children[task.ParentTaskID], task)
+				continue
+			}
+		}
+		roots = append(roots, task)
+	}
+
+	ordered := make([]cache.TaskEntity, 0, len(tasks))
+	visited := make(map[string]bool, len(tasks))
+
+	var appendWithChildren func(task cache.TaskEntity)
+	appendWithChildren = func(task cache.TaskEntity) {
+		if task.ID != "" && visited[task.ID] {
+			return
+		}
+		ordered = append(ordered, task)
+		if task.ID != "" {
+			visited[task.ID] = true
+		}
+		for _, child := range children[task.ID] {
+			appendWithChildren(child)
+		}
+	}
+
+	for _, root := range roots {
+		appendWithChildren(root)
+	}
+	for _, task := range tasks {
+		if task.ID == "" || !visited[task.ID] {
+			appendWithChildren(task)
+		}
+	}
+
+	return ordered
 }
 
 func fuzzyScoreTask(task cache.TaskEntity, query string) (int, bool) {

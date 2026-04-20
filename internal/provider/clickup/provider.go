@@ -80,6 +80,9 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 				task.DueAtUnixMS = &parsedDue
 			}
 		}
+		if t.TimeEstimate != nil {
+			task.EstimateMS = t.TimeEstimate
+		}
 		if t.Priority != nil {
 			rank, _ := strconv.Atoi(t.Priority.OrderIndex)
 			task.Priority = &provider.Priority{
@@ -138,6 +141,9 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 		if parsedDue, parseErr := strconv.ParseInt(*t.DueDate, 10, 64); parseErr == nil {
 			task.DueAtUnixMS = &parsedDue
 		}
+	}
+	if t.TimeEstimate != nil {
+		task.EstimateMS = t.TimeEstimate
 	}
 	if t.Priority != nil {
 		rank, _ := strconv.Atoi(t.Priority.OrderIndex)

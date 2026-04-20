@@ -118,7 +118,9 @@ func mapTaskToEntity(task provider.Task, listID string) cache.TaskEntity {
 		row.PriorityKey = task.Priority.Key
 		row.PriorityLabel = task.Priority.Label
 		row.PriorityRank = task.Priority.Rank
+		row.PriorityColor = task.Priority.Color
 	}
+	row.EstimateMS = task.EstimateMS
 	row.DueAtUnixMS = task.DueAtUnixMS
 	if len(task.CustomFields) > 0 {
 		if b, err := json.Marshal(task.CustomFields); err == nil {

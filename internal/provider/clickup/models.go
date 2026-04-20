@@ -83,6 +83,7 @@ type TaskDTO struct {
 	Description  string           `json:"description"`
 	Status       TaskStatusDTO    `json:"status"`
 	Priority     *TaskPriorityDTO `json:"priority"`
+	TimeEstimate *int64           `json:"time_estimate"`
 	DueDate      *string          `json:"due_date"`
 	Parent       *string          `json:"parent"`
 	Assignees    []UserDTO        `json:"assignees"`
