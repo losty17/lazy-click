@@ -135,3 +135,12 @@ Use unified models (`Task`, `User`, `Priority`, `Tag`, etc.) and map provider pa
 - Changed task open behavior so table cursor movement does not auto-open details; task details now open on `Enter`.
 - Added distinct cursor-vs-opened-task semantics in the table (green cursor row and orange opened-detail row).
 - Added a simple `~>` prefix indicator for subtasks in the task list.
+
+### 2026-04-21
+
+- Added a new control center overlay opened by `ctrl+p`, `ctrl+k`, or `:` with mode prefixes (`>`, `@`, `#`, `?`).
+- Replaced dedicated list search keyflow with control center list mode (`@`), and reserved `?` for searchable help mode.
+- Added command registry with aliases, badges, recent-command ordering, and local command usage telemetry persisted in app state.
+- Added browser-like session restore policy (`ask|always|never`) with default `ask`, including startup restore prompt and persisted session snapshots.
+- Added persisted configuration for task sort/group/subtask mode, task status filter, task search query, and vim-mode flag.
+- Added optional vim-mode-gated control center navigation and advanced movement (`ctrl+d` / `ctrl+u`).

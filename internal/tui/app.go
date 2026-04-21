@@ -16,6 +16,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -23,9 +24,67 @@ const (
 	appStateListSortMode     = "ui.list_sort_mode"
 	appStateListSearchQuery  = "ui.list_search_query"
 	appStateFavoritesOnly    = "ui.list_favorites_only"
+	appStateTaskSortMode     = "ui.task_sort_mode"
+	appStateTaskGroupMode    = "ui.task_group_mode"
+	appStateTaskSubtasksMode = "ui.task_subtasks_mode"
+	appStateStatusFilter     = "ui.status_filter"
+	appStateTaskSearchQuery  = "ui.task_search_query"
+	appStateVimModeEnabled   = "ui.vim_mode.enabled"
+	appStateRestorePolicy    = "ui.restore.policy"
+	appStateRestoreSession   = "ui.restore.last_session"
+	appStateRecentCommands   = "ui.control_center.recent_commands"
+	appStateCommandUsage     = "ui.control_center.command_usage"
 
 	detailDebounceDelay = 3 * time.Second
 )
+
+type RestorePolicy string
+
+const (
+	RestorePolicyAsk    RestorePolicy = "ask"
+	RestorePolicyAlways RestorePolicy = "always"
+	RestorePolicyNever  RestorePolicy = "never"
+)
+
+type ControlMode string
+
+const (
+	ControlModeCommand ControlMode = ">"
+	ControlModeList    ControlMode = "@"
+	ControlModeTask    ControlMode = "#"
+	ControlModeHelp    ControlMode = "?"
+)
+
+type controlResult struct {
+	Kind      string
+	Title     string
+	Subtitle  string
+	Badge     string
+	CommandID string
+	ListID    string
+	TaskID    string
+	TaskTitle string
+}
+
+type commandUsageStat struct {
+	Count        int   `json:"count"`
+	LastUsedUnix int64 `json:"last_used_unix"`
+}
+
+type uiSessionSnapshot struct {
+	SelectedListID  string             `json:"selected_list_id"`
+	DisplayedTaskID string             `json:"displayed_task_id"`
+	ActivePane      int                `json:"active_pane"`
+	ListSearchQuery string             `json:"list_search_query"`
+	ListSortMode    cache.ListSortMode `json:"list_sort_mode"`
+	FavoritesOnly   bool               `json:"favorites_only"`
+	TaskSortMode    TaskSortMode       `json:"task_sort_mode"`
+	TaskGroupMode   TaskGroupMode      `json:"task_group_mode"`
+	TaskSubtasks    TaskSubtaskMode    `json:"task_subtasks"`
+	StatusFilter    string             `json:"status_filter"`
+	TaskSearchQuery string             `json:"task_search_query"`
+	VimMode         bool               `json:"vim_mode"`
+}
 
 type TaskSortMode string
 
@@ -86,14 +145,27 @@ type RootModel struct {
 	searchQuery  string
 	searchBackup string
 
-	listSearchMode   bool
-	listSearchInput  string
-	listSearchQuery  string
-	listSearchBackup string
-	listSortMode     cache.ListSortMode
-	favoritesOnly    bool
-	stateHydrated    bool
-	selectedListID   string
+	listSearchQuery       string
+	listSortMode          cache.ListSortMode
+	favoritesOnly         bool
+	stateHydrated         bool
+	selectedListID        string
+	restorePolicy         RestorePolicy
+	restorePrompt         bool
+	restorePromptSelected int
+	restoreSnapshot       uiSessionSnapshot
+	hasRestoreState       bool
+	restorePromptSeen     bool
+	vimMode               bool
+
+	controlOpen     bool
+	controlMode     ControlMode
+	controlInput    string
+	controlSelected int
+	controlResults  []controlResult
+	recentCommands  []string
+	commandUsage    map[string]commandUsageStat
+	loadedTasks     []cache.TaskEntity
 
 	commentMode   bool
 	commentInput  string
@@ -123,6 +195,17 @@ type dataLoadedMsg struct {
 	restoredListSearch string
 	restoredSortMode   cache.ListSortMode
 	restoredFavOnly    bool
+	restoredTaskSort   TaskSortMode
+	restoredTaskGroup  TaskGroupMode
+	restoredSubtasks   TaskSubtaskMode
+	restoredStatus     string
+	restoredTaskSearch string
+	restoredVimMode    bool
+	restorePolicy      RestorePolicy
+	hasRestoreSnapshot bool
+	restoreSnapshot    uiSessionSnapshot
+	recentCommands     []string
+	commandUsage       map[string]commandUsageStat
 }
 
 type editResultMsg struct{ err error }
@@ -169,6 +252,9 @@ func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, providerName 
 		taskGroupMode: TaskGroupNone,
 		taskSubtasks:  TaskSubtaskFlat,
 		favoritesOnly: false,
+		restorePolicy: RestorePolicyAsk,
+		controlMode:   ControlModeCommand,
+		commandUsage:  make(map[string]commandUsageStat),
 	}
 }
 
@@ -183,6 +269,46 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tea.KeyMsg:
+		if m.restorePrompt {
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.restorePromptSelected > 0 {
+					m.restorePromptSelected--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.restorePromptSelected+1 < len(restorePromptOptions()) {
+					m.restorePromptSelected++
+				}
+				return m, nil
+			case tea.KeyEnter:
+				options := restorePromptOptions()
+				if len(options) == 0 {
+					return m, nil
+				}
+				if m.restorePromptSelected < 0 || m.restorePromptSelected >= len(options) {
+					m.restorePromptSelected = 0
+				}
+				return m, m.applyRestorePromptAction(options[m.restorePromptSelected].Action)
+			}
+
+			switch msg.String() {
+			case "r", "R":
+				return m, m.applyRestorePromptAction("restore")
+			case "n", "N", "esc":
+				return m, m.applyRestorePromptAction("fresh")
+			case "a", "A":
+				return m, m.applyRestorePromptAction("always")
+			case "v", "V":
+				return m, m.applyRestorePromptAction("never")
+			}
+			return m, nil
+		}
+
+		if m.controlOpen {
+			return m, m.updateControlCenter(msg)
+		}
+
 		if m.commentMode {
 			switch msg.Type {
 			case tea.KeyEsc:
@@ -211,6 +337,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMode = false
 				m.searchInput = ""
 				m.searchQuery = m.searchBackup
+				m.saveTaskPrefs()
 				return m, m.loadDataCmd()
 			case tea.KeyEnter:
 				m.searchMode = false
@@ -221,6 +348,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.statusLine = "Task search: " + m.searchQuery
 				}
+				m.saveTaskPrefs()
+				m.persistSessionSnapshot()
 				return m, m.loadDataCmd()
 			case tea.KeyBackspace, tea.KeyDelete:
 				r := []rune(m.searchInput)
@@ -233,40 +362,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.searchQuery = strings.TrimSpace(m.searchInput)
-			return m, m.loadDataCmd()
-		}
-
-		if m.listSearchMode {
-			switch msg.Type {
-			case tea.KeyEsc:
-				m.listSearchMode = false
-				m.listSearchInput = ""
-				m.listSearchQuery = m.listSearchBackup
-				m.saveListPrefs()
-				return m, m.loadDataCmd()
-			case tea.KeyEnter:
-				m.listSearchMode = false
-				m.listSearchQuery = strings.TrimSpace(m.listSearchInput)
-				m.listSearchInput = ""
-				if m.listSearchQuery == "" {
-					m.statusLine = "List search cleared"
-				} else {
-					m.statusLine = "List search: " + m.listSearchQuery
-				}
-				m.saveListPrefs()
-				return m, m.loadDataCmd()
-			case tea.KeyBackspace, tea.KeyDelete:
-				r := []rune(m.listSearchInput)
-				if len(r) > 0 {
-					m.listSearchInput = string(r[:len(r)-1])
-				}
-			default:
-				if len(msg.Runes) > 0 {
-					m.listSearchInput += string(msg.Runes)
-				}
-			}
-			m.listSearchQuery = strings.TrimSpace(m.listSearchInput)
-			m.saveListPrefs()
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		}
 
@@ -287,7 +383,17 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.persistSessionSnapshot()
 			return m, tea.Quit
+		case "ctrl+p", "ctrl+k":
+			m.openControlCenter(ControlModeCommand)
+			return m, nil
+		case ":":
+			m.openControlCenter(ControlModeCommand)
+			return m, nil
+		case "?":
+			m.openControlCenter(ControlModeHelp)
+			return m, nil
 		case "home":
 			m.handleMoveToTop()
 		case "end":
@@ -304,6 +410,14 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.handleHorizontalMove(-2)
 		case "l", "right":
 			m.handleHorizontalMove(2)
+		case "ctrl+d":
+			if m.vimMode {
+				m.handleMove(10)
+			}
+		case "ctrl+u":
+			if m.vimMode {
+				m.handleMove(-10)
+			}
 		case "r":
 			return m, m.loadDataCmd()
 		case "s":
@@ -337,19 +451,16 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.keymap.Filter:
 			m.cycleStatusFilter(1)
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case strings.ToUpper(m.keymap.Filter):
 			m.cycleStatusFilter(-1)
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case m.keymap.Search:
 			m.searchMode = true
 			m.searchInput = m.searchQuery
 			m.searchBackup = m.searchQuery
-			return m, nil
-		case m.keymap.ListSearch:
-			m.listSearchMode = true
-			m.listSearchInput = m.listSearchQuery
-			m.listSearchBackup = m.listSearchQuery
 			return m, nil
 		case m.keymap.TaskTitle:
 			if m.activePane == 1 {
@@ -372,12 +483,15 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.loadDataCmd()
 		case m.keymap.SortTasks:
 			m.cycleTaskSort(1)
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case m.keymap.GroupTasks:
 			m.cycleTaskGroup(1)
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case m.keymap.Subtasks:
 			m.cycleTaskSubtasks(1)
+			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case m.keymap.CollapseAll:
 			if m.activePane == 1 {
@@ -445,6 +559,33 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.listSortMode = msg.restoredSortMode
 			}
 			m.favoritesOnly = msg.restoredFavOnly
+			if msg.restoredTaskSort != "" {
+				m.taskSortMode = msg.restoredTaskSort
+			}
+			if msg.restoredTaskGroup != "" {
+				m.taskGroupMode = msg.restoredTaskGroup
+			}
+			if msg.restoredSubtasks != "" {
+				m.taskSubtasks = msg.restoredSubtasks
+			}
+			m.statusFilter = msg.restoredStatus
+			m.searchQuery = msg.restoredTaskSearch
+			m.vimMode = msg.restoredVimMode
+			if msg.restorePolicy != "" {
+				m.restorePolicy = msg.restorePolicy
+			}
+			m.restoreSnapshot = msg.restoreSnapshot
+			m.hasRestoreState = msg.hasRestoreSnapshot
+			m.recentCommands = append([]string(nil), msg.recentCommands...)
+			if msg.commandUsage != nil {
+				m.commandUsage = msg.commandUsage
+			}
+			if m.restorePolicy == RestorePolicyAlways && m.hasRestoreState {
+				m.applySessionSnapshot(m.restoreSnapshot)
+			} else if m.restorePolicy == RestorePolicyAsk && m.hasRestoreState {
+				m.restorePrompt = true
+				m.restorePromptSelected = 0
+			}
 		}
 
 		m.lists = msg.lists
@@ -473,6 +614,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetSelectedIndex(selectedIdx)
 
 		m.taskTable.SetRows(mapTasksToRows(msg.tasks, m.taskGroupMode, m.taskSubtasks))
+		m.loadedTasks = append([]cache.TaskEntity(nil), msg.tasks...)
 		if m.displayedTaskID != "" {
 			if _, ok := m.taskTable.RowByID(m.displayedTaskID); !ok {
 				m.displayedTaskID = ""
@@ -687,21 +829,17 @@ func (m RootModel) View() string {
 	if m.searchQuery != "" {
 		taskSearch = m.searchQuery
 	}
-	listSearch := "off"
-	if m.listSearchQuery != "" {
-		listSearch = m.listSearchQuery
-	}
 	status := fmt.Sprintf(
-		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | List search: %s | Task status: %s | Task search: %s",
+		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Task status: %s | Task search: %s | Vim mode: %t",
 		m.provider,
 		m.listSortMode,
 		m.taskSortMode,
 		m.taskGroupMode,
 		m.taskSubtasks,
 		m.favoritesOnly,
-		listSearch,
 		statusFilter,
 		taskSearch,
+		m.vimMode,
 	)
 
 	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
@@ -709,10 +847,12 @@ func (m RootModel) View() string {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.searchMode {
 		help = fmt.Sprintf("Task search mode: %s (type to filter, Enter apply, Esc cancel)", m.searchInput)
-	} else if m.listSearchMode {
-		help = fmt.Sprintf("List search mode: %s (type to filter, Enter apply, Esc cancel)", m.listSearchInput)
+	} else if m.controlOpen {
+		help = "Control center: Enter run/select, Esc close, @ lists, # tasks, ? help, > commands"
+	} else if m.restorePrompt {
+		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
-		help = "Keys: hjkl/arrows move cursor, home/end jump, Enter open/toggle row, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -725,6 +865,17 @@ func (m RootModel) View() string {
 		syncLine,
 		HelpStyle.Render(truncateLine(help, totalWidth)),
 	}, "\n")
+
+	if m.restorePrompt {
+		overlay := m.renderRestorePrompt(totalWidth)
+		y := centeredOverlayY(screen, overlay, -2)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.controlOpen {
+		overlay := m.renderControlCenter(totalWidth)
+		y := centeredOverlayY(screen, overlay, 0)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
 
 	return lipgloss.NewStyle().
 		Width(totalWidth).
@@ -793,7 +944,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	}
 
 	currentListID := m.selectedListID
-	currentSearch := m.listSearchQuery
+	currentSearch := ""
 	currentSort := m.listSortMode
 	currentFavOnly := m.favoritesOnly
 	hydrated := m.stateHydrated
@@ -806,10 +957,6 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	return func() tea.Msg {
 		msg := dataLoadedMsg{}
 		if !hydrated {
-			search, err := m.repo.GetAppState(appStateListSearchQuery)
-			if err != nil {
-				return dataLoadedMsg{err: err}
-			}
 			sortMode := cache.ListSortNameAsc
 			if sortRaw, err := m.repo.GetAppState(appStateListSortMode); err != nil {
 				return dataLoadedMsg{err: err}
@@ -836,13 +983,97 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 					currentListID = recent
 				}
 			}
-			currentSearch = search
+
+			taskSortMode = TaskSortPriority
+			if sortRaw, err := m.repo.GetAppState(appStateTaskSortMode); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if parsed := TaskSortMode(sortRaw); parsed != "" {
+				taskSortMode = parsed
+			}
+
+			taskGroupMode = TaskGroupNone
+			if groupRaw, err := m.repo.GetAppState(appStateTaskGroupMode); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if parsed := TaskGroupMode(groupRaw); parsed != "" {
+				taskGroupMode = parsed
+			}
+
+			taskSubtaskMode = TaskSubtaskFlat
+			if subRaw, err := m.repo.GetAppState(appStateTaskSubtasksMode); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if parsed := TaskSubtaskMode(subRaw); parsed != "" {
+				taskSubtaskMode = parsed
+			}
+
+			if statusRaw, err := m.repo.GetAppState(appStateStatusFilter); err != nil {
+				return dataLoadedMsg{err: err}
+			} else {
+				statusFilter = statusRaw
+			}
+
+			if taskSearchRaw, err := m.repo.GetAppState(appStateTaskSearchQuery); err != nil {
+				return dataLoadedMsg{err: err}
+			} else {
+				taskSearch = taskSearchRaw
+			}
+
+			vimMode := false
+			if vimRaw, err := m.repo.GetAppState(appStateVimModeEnabled); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if vimRaw != "" {
+				if parsed, parseErr := strconv.ParseBool(vimRaw); parseErr == nil {
+					vimMode = parsed
+				}
+			}
+
+			restorePolicy := RestorePolicyAsk
+			if policyRaw, err := m.repo.GetAppState(appStateRestorePolicy); err != nil {
+				return dataLoadedMsg{err: err}
+			} else {
+				restorePolicy = normalizeRestorePolicy(policyRaw)
+			}
+
+			hasSnapshot := false
+			snapshot := uiSessionSnapshot{}
+			if snapshotRaw, err := m.repo.GetAppState(appStateRestoreSession); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if strings.TrimSpace(snapshotRaw) != "" {
+				if unmarshalErr := json.Unmarshal([]byte(snapshotRaw), &snapshot); unmarshalErr == nil {
+					hasSnapshot = true
+				}
+			}
+
+			recentCommands := []string{}
+			if recentRaw, err := m.repo.GetAppState(appStateRecentCommands); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if strings.TrimSpace(recentRaw) != "" {
+				_ = json.Unmarshal([]byte(recentRaw), &recentCommands)
+			}
+
+			usage := make(map[string]commandUsageStat)
+			if usageRaw, err := m.repo.GetAppState(appStateCommandUsage); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if strings.TrimSpace(usageRaw) != "" {
+				_ = json.Unmarshal([]byte(usageRaw), &usage)
+			}
+
 			currentSort = sortMode
 			currentFavOnly = favOnly
 			msg.restored = true
 			msg.restoredListSearch = currentSearch
 			msg.restoredSortMode = currentSort
 			msg.restoredFavOnly = currentFavOnly
+			msg.restoredTaskSort = taskSortMode
+			msg.restoredTaskGroup = taskGroupMode
+			msg.restoredSubtasks = taskSubtaskMode
+			msg.restoredStatus = statusFilter
+			msg.restoredTaskSearch = taskSearch
+			msg.restoredVimMode = vimMode
+			msg.restorePolicy = restorePolicy
+			msg.hasRestoreSnapshot = hasSnapshot
+			msg.restoreSnapshot = snapshot
+			msg.recentCommands = recentCommands
+			msg.commandUsage = usage
 		}
 
 		lists, err := m.repo.GetListsByQuery(cache.ListQuery{
@@ -1310,7 +1541,6 @@ func (m RootModel) saveListPrefs() {
 		return
 	}
 	_ = m.repo.SaveAppState(appStateListSortMode, string(m.listSortMode))
-	_ = m.repo.SaveAppState(appStateListSearchQuery, m.listSearchQuery)
 	_ = m.repo.SaveAppState(appStateFavoritesOnly, strconv.FormatBool(m.favoritesOnly))
 }
 
@@ -1333,6 +1563,55 @@ func truncateLine(s string, width int) string {
 		return "…"
 	}
 	return string(r[:width-1]) + "…"
+}
+
+func overlayCentered(base string, overlay string, width int, y int) string {
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+	if y < 0 {
+		y = 0
+	}
+
+	for i, overlayLine := range overlayLines {
+		baseY := y + i
+		if baseY < 0 || baseY >= len(baseLines) {
+			continue
+		}
+		line := overlayLine
+		lineWidth := xansi.StringWidth(line)
+		if lineWidth <= 0 {
+			continue
+		}
+		if lineWidth > width {
+			line = xansi.Cut(line, 0, width)
+			lineWidth = xansi.StringWidth(line)
+		}
+
+		baseLine := lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Top, baseLines[baseY])
+		x := max((width-lineWidth)/2, 0)
+		left := xansi.Cut(baseLine, 0, x)
+		right := xansi.Cut(baseLine, x+lineWidth, width)
+		baseLines[baseY] = left + line + right
+	}
+
+	return strings.Join(baseLines, "\n")
+}
+
+func centeredOverlayY(base string, overlay string, offset int) int {
+	baseH := len(strings.Split(base, "\n"))
+	overlayH := len(strings.Split(overlay, "\n"))
+	if overlayH <= 0 {
+		return 0
+	}
+	y := (baseH-overlayH)/2 + offset
+	if y < 0 {
+		return 0
+	}
+	maxY := max(baseH-overlayH, 0)
+	if y > maxY {
+		return maxY
+	}
+	return y
 }
 
 func min(a int, b int) int {

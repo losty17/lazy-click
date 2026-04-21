@@ -4,7 +4,6 @@ type Keymap struct {
 	Down        string
 	Up          string
 	Search      string
-	ListSearch  string
 	TaskTitle   string
 	Edit        string
 	RefreshTask string
@@ -24,7 +23,6 @@ func DefaultKeymap() Keymap {
 		Down:        "j",
 		Up:          "k",
 		Search:      "/",
-		ListSearch:  "?",
 		TaskTitle:   "t",
 		Edit:        "i",
 		RefreshTask: "R",
