@@ -74,7 +74,8 @@ type ListDTO struct {
 }
 
 type GetTasksResponse struct {
-	Tasks []TaskDTO `json:"tasks"`
+	Tasks    []TaskDTO `json:"tasks"`
+	LastPage bool      `json:"last_page"`
 }
 
 type TaskDTO struct {

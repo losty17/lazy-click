@@ -23,7 +23,7 @@ func NewDetail() DetailModel {
 }
 
 func (m *DetailModel) Move(delta int) {
-	next := max(m.idx + delta, 0)
+	next := max(m.idx+delta, 0)
 	m.idx = next
 }
 
@@ -43,8 +43,19 @@ func (m *DetailModel) SetSections(sections []string) {
 }
 
 func (m *DetailModel) MoveHorizontal(delta int) {
-	next := max(m.x + delta, 0)
+	next := max(m.x+delta, 0)
 	m.x = next
+}
+
+func (m *DetailModel) MoveToTop() {
+	m.idx = 0
+}
+
+func (m *DetailModel) MoveToBottom() {
+	m.idx = len(m.sections)
+	if m.idx < 0 {
+		m.idx = 0
+	}
 }
 
 func (m DetailModel) Render(active bool, width int, height int) string {
@@ -61,15 +72,15 @@ func (m DetailModel) Render(active bool, width int, height int) string {
 	// Expand logical sections into one flat list of renderable lines.
 	bodyLines := m.expandedLines(width)
 
-	bodySize := max(height - 1, 0)
+	bodySize := max(height-1, 0)
 	start := max(m.idx, 0)
-	maxStart := max(len(bodyLines) - bodySize, 0)
+	maxStart := max(len(bodyLines)-bodySize, 0)
 
 	if start > maxStart {
 		start = maxStart
 	}
 
-	end := min(start + bodySize, len(bodyLines))
+	end := min(start+bodySize, len(bodyLines))
 
 	for i := start; i < end; i++ {
 		// lineWindow applies horizontal scrolling offset m.x.

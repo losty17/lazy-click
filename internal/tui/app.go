@@ -45,6 +45,13 @@ const (
 	TaskGroupAssignee TaskGroupMode = "assignee"
 )
 
+type TaskSubtaskMode string
+
+const (
+	TaskSubtaskFlat    TaskSubtaskMode = "flat"
+	TaskSubtaskGrouped TaskSubtaskMode = "grouped"
+)
+
 type SyncQueuer interface {
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
 	QueueAddComment(taskID string, text string) error
@@ -71,6 +78,7 @@ type RootModel struct {
 	statuses      []string
 	taskSortMode  TaskSortMode
 	taskGroupMode TaskGroupMode
+	taskSubtasks  TaskSubtaskMode
 
 	statusFilter string
 	searchMode   bool
@@ -159,6 +167,7 @@ func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, providerName 
 		listSortMode:  cache.ListSortNameAsc,
 		taskSortMode:  TaskSortPriority,
 		taskGroupMode: TaskGroupNone,
+		taskSubtasks:  TaskSubtaskFlat,
 		favoritesOnly: false,
 	}
 }
@@ -263,12 +272,26 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		prevListID := m.selectedListID
 		if msg.Type == tea.KeyEnter && m.activePane == 1 {
+			selectedRow, ok := m.taskTable.Selected()
+			if !ok {
+				return m, nil
+			}
+			if m.taskTable.ToggleSelectedCollapse() {
+				if selectedRow.Type == components.TaskTableRowTask && selectedRow.ID != "" {
+					return m, m.selectCursorTaskForDisplayCmd()
+				}
+				return m, nil
+			}
 			return m, m.selectCursorTaskForDisplayCmd()
 		}
 
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "home":
+			m.handleMoveToTop()
+		case "end":
+			m.handleMoveToBottom()
 		case "tab":
 			m.activePane = (m.activePane + 1) % 3
 		case "shift+tab", "backtab":
@@ -353,6 +376,23 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case m.keymap.GroupTasks:
 			m.cycleTaskGroup(1)
 			return m, m.loadDataCmd()
+		case m.keymap.Subtasks:
+			m.cycleTaskSubtasks(1)
+			return m, m.loadDataCmd()
+		case m.keymap.CollapseAll:
+			if m.activePane == 1 {
+				changed, collapsed := m.taskTable.CollapseAll()
+				if changed {
+					if collapsed {
+						m.statusLine = "Collapsed all groups"
+					} else {
+						m.statusLine = "Expanded all groups"
+					}
+				} else {
+					m.statusLine = "No groups available"
+				}
+				return m, nil
+			}
 		case m.keymap.FavOnly:
 			m.favoritesOnly = !m.favoritesOnly
 			m.saveListPrefs()
@@ -432,7 +472,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetItems(sidebarItems)
 		m.sidebar.SetSelectedIndex(selectedIdx)
 
-		m.taskTable.SetRows(mapTasksToRows(msg.tasks))
+		m.taskTable.SetRows(mapTasksToRows(msg.tasks, m.taskGroupMode, m.taskSubtasks))
 		if m.displayedTaskID != "" {
 			if _, ok := m.taskTable.RowByID(m.displayedTaskID); !ok {
 				m.displayedTaskID = ""
@@ -577,6 +617,28 @@ func (m *RootModel) handleHorizontalMove(delta int) {
 	}
 }
 
+func (m *RootModel) handleMoveToTop() {
+	switch m.activePane {
+	case 0:
+		m.sidebar.MoveToTop()
+	case 1:
+		m.taskTable.MoveToTop()
+	case 2:
+		m.detailPanel.MoveToTop()
+	}
+}
+
+func (m *RootModel) handleMoveToBottom() {
+	switch m.activePane {
+	case 0:
+		m.sidebar.MoveToBottom()
+	case 1:
+		m.taskTable.MoveToBottom()
+	case 2:
+		m.detailPanel.MoveToBottom()
+	}
+}
+
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
 	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
@@ -630,18 +692,19 @@ func (m RootModel) View() string {
 		listSearch = m.listSearchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Favorites-only: %t | List search: %s | Task status: %s | Task search: %s",
+		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | List search: %s | Task status: %s | Task search: %s",
 		m.provider,
 		m.listSortMode,
 		m.taskSortMode,
 		m.taskGroupMode,
+		m.taskSubtasks,
 		m.favoritesOnly,
 		listSearch,
 		statusFilter,
 		taskSearch,
 	)
 
-	help := "Keys: hjkl/arrows move, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.searchMode {
@@ -649,7 +712,7 @@ func (m RootModel) View() string {
 	} else if m.listSearchMode {
 		help = fmt.Sprintf("List search mode: %s (type to filter, Enter apply, Esc cancel)", m.listSearchInput)
 	} else {
-		help = "Keys: hjkl/arrows move cursor, Enter open task, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: hjkl/arrows move cursor, home/end jump, Enter open/toggle row, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh opened task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -738,6 +801,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	taskSearch := m.searchQuery
 	taskSortMode := m.taskSortMode
 	taskGroupMode := m.taskGroupMode
+	taskSubtaskMode := m.taskSubtasks
 
 	return func() tea.Msg {
 		msg := dataLoadedMsg{}
@@ -811,7 +875,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			return dataLoadedMsg{err: err}
 		}
 		tasks = fuzzyFindTasks(tasks, taskSearch)
-		tasks = organizeTasks(tasks, taskSortMode, taskGroupMode)
+		tasks = organizeTasks(tasks, taskSortMode, taskGroupMode, taskSubtaskMode)
 
 		statuses, err := m.repo.GetTaskStatusesByList(selectedListID)
 		if err != nil {
@@ -1165,6 +1229,23 @@ func (m *RootModel) cycleTaskGroup(step int) {
 	m.statusLine = "Task group: " + string(m.taskGroupMode)
 }
 
+func (m *RootModel) cycleTaskSubtasks(step int) {
+	options := []TaskSubtaskMode{TaskSubtaskFlat, TaskSubtaskGrouped}
+	current := 0
+	for i, mode := range options {
+		if mode == m.taskSubtasks {
+			current = i
+			break
+		}
+	}
+	next := (current + step) % len(options)
+	if next < 0 {
+		next += len(options)
+	}
+	m.taskSubtasks = options[next]
+	m.statusLine = "Subtasks: " + string(m.taskSubtasks)
+}
+
 func (m RootModel) syncTickCmd() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg {
 		return syncTickMsg{}
@@ -1286,9 +1367,42 @@ func containsListID(lists []cache.ListEntity, listID string) bool {
 	return false
 }
 
-func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
-	rows := make([]components.TaskTableRow, 0, len(tasks))
+func mapTasksToRows(tasks []cache.TaskEntity, groupMode TaskGroupMode, subtaskMode TaskSubtaskMode) []components.TaskTableRow {
+	hasChildren := make(map[string]bool, len(tasks))
+	presentTaskIDs := make(map[string]struct{}, len(tasks))
+	tasksByID := make(map[string]cache.TaskEntity, len(tasks))
 	for _, task := range tasks {
+		if task.ID != "" {
+			presentTaskIDs[task.ID] = struct{}{}
+			tasksByID[task.ID] = task
+		}
+		if task.IsSubtask && task.ParentTaskID != "" && task.ParentTaskID != task.ID {
+			hasChildren[task.ParentTaskID] = true
+		}
+	}
+
+	rows := make([]components.TaskTableRow, 0, len(tasks)+(len(tasks)/4)+4)
+	currentGroupKey := ""
+	currentGroupCollapseKey := ""
+
+	for _, task := range tasks {
+		groupAnchor := taskGroupingAnchor(task, tasksByID, subtaskMode)
+		groupKey := taskGroupKey(groupAnchor, groupMode)
+		if groupMode != TaskGroupNone && groupKey != currentGroupKey {
+			currentGroupKey = groupKey
+			currentGroupCollapseKey = "group:" + string(groupMode) + ":" + groupKey
+			rows = append(rows, components.TaskTableRow{
+				Type:        components.TaskTableRowGroup,
+				Title:       taskGroupLabel(groupAnchor, groupMode),
+				Status:      "",
+				Priority:    "",
+				Estimate:    "",
+				DueDate:     "",
+				Assignees:   "",
+				CollapseKey: currentGroupCollapseKey,
+			})
+		}
+
 		priority := "-"
 		if task.PriorityLabel != "" {
 			priority = task.PriorityLabel
@@ -1297,26 +1411,47 @@ func mapTasksToRows(tasks []cache.TaskEntity) []components.TaskTableRow {
 		if task.DueAtUnixMS != nil {
 			due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
 		}
+
+		indent := 0
+		hiddenBy := make([]string, 0, 2)
+		if groupMode != TaskGroupNone {
+			indent += 2
+			hiddenBy = append(hiddenBy, currentGroupCollapseKey)
+		}
+
+		title := task.Title
+		depth, ancestorIDs := taskNesting(task, presentTaskIDs, tasksByID)
+		if subtaskMode == TaskSubtaskGrouped && depth > 0 {
+			indent += 2 * depth
+		}
+
+		collapseKey := ""
+		if subtaskMode == TaskSubtaskGrouped {
+			if hasChildren[task.ID] {
+				collapseKey = "subtask:" + task.ID
+			}
+			for _, ancestorID := range ancestorIDs {
+				hiddenBy = append(hiddenBy, "subtask:"+ancestorID)
+			}
+		}
+
 		rows = append(rows, components.TaskTableRow{
+			Type:        components.TaskTableRowTask,
 			ID:          task.ID,
 			ListID:      task.ListID,
-			Title:       formatTaskTitle(task),
+			Title:       title,
 			Status:      task.Status,
 			StatusColor: task.StatusColor,
 			Priority:    priority,
 			Estimate:    formatEstimate(task.EstimateMS),
 			DueDate:     due,
 			Assignees:   formatAssignees(task.AssigneesJSON),
+			Indent:      indent,
+			CollapseKey: collapseKey,
+			HiddenBy:    hiddenBy,
 		})
 	}
 	return rows
-}
-
-func formatTaskTitle(task cache.TaskEntity) string {
-	if task.IsSubtask {
-		return "   -> " + task.Title
-	}
-	return task.Title
 }
 
 func formatEstimate(estimateMS *int64) string {
@@ -1397,22 +1532,98 @@ func fuzzyFindTasks(tasks []cache.TaskEntity, query string) []cache.TaskEntity {
 	return out
 }
 
-func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, groupMode TaskGroupMode) []cache.TaskEntity {
+func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, groupMode TaskGroupMode, subtaskMode TaskSubtaskMode) []cache.TaskEntity {
 	if len(tasks) <= 1 {
 		return tasks
 	}
 
 	ordered := append([]cache.TaskEntity(nil), tasks...)
+	tasksByID := make(map[string]cache.TaskEntity, len(ordered))
+	for _, task := range ordered {
+		if task.ID != "" {
+			tasksByID[task.ID] = task
+		}
+	}
 	sort.SliceStable(ordered, func(i int, j int) bool {
-		groupI := taskGroupKey(ordered[i], groupMode)
-		groupJ := taskGroupKey(ordered[j], groupMode)
+		groupI := taskGroupKey(taskGroupingAnchor(ordered[i], tasksByID, subtaskMode), groupMode)
+		groupJ := taskGroupKey(taskGroupingAnchor(ordered[j], tasksByID, subtaskMode), groupMode)
 		if groupI != groupJ {
 			return groupI < groupJ
 		}
 		return taskLess(ordered[i], ordered[j], sortMode)
 	})
 
-	return placeSubtasksAfterParents(ordered)
+	if subtaskMode == TaskSubtaskGrouped {
+		return placeSubtasksAfterParents(ordered)
+	}
+
+	return ordered
+}
+
+func taskGroupingAnchor(task cache.TaskEntity, tasksByID map[string]cache.TaskEntity, subtaskMode TaskSubtaskMode) cache.TaskEntity {
+	if subtaskMode != TaskSubtaskGrouped {
+		return task
+	}
+	if !task.IsSubtask || task.ParentTaskID == "" || task.ParentTaskID == task.ID {
+		return task
+	}
+	parent, ok := tasksByID[task.ParentTaskID]
+	if !ok {
+		return task
+	}
+	return parent
+}
+
+func taskNesting(task cache.TaskEntity, presentTaskIDs map[string]struct{}, tasksByID map[string]cache.TaskEntity) (int, []string) {
+	if !task.IsSubtask || task.ParentTaskID == "" || task.ParentTaskID == task.ID {
+		return 0, nil
+	}
+
+	depth := 0
+	ancestors := make([]string, 0, 4)
+	currentParentID := task.ParentTaskID
+	visited := make(map[string]struct{}, 4)
+
+	for currentParentID != "" {
+		if _, seen := visited[currentParentID]; seen {
+			break
+		}
+		visited[currentParentID] = struct{}{}
+
+		if _, ok := presentTaskIDs[currentParentID]; !ok {
+			break
+		}
+
+		ancestors = append(ancestors, currentParentID)
+		depth++
+
+		parent, ok := tasksByID[currentParentID]
+		if !ok || !parent.IsSubtask || parent.ParentTaskID == "" || parent.ParentTaskID == parent.ID {
+			break
+		}
+		currentParentID = parent.ParentTaskID
+	}
+
+	return depth, ancestors
+}
+
+func taskGroupLabel(task cache.TaskEntity, mode TaskGroupMode) string {
+	switch mode {
+	case TaskGroupStatus:
+		label := strings.TrimSpace(task.Status)
+		if label == "" {
+			return "Status: (none)"
+		}
+		return "Status: " + label
+	case TaskGroupAssignee:
+		assignee := strings.TrimSpace(primaryAssignee(task.AssigneesJSON))
+		if assignee == "" {
+			return "Assignee: unassigned"
+		}
+		return "Assignee: " + assignee
+	default:
+		return "Group"
+	}
 }
 
 func taskGroupKey(task cache.TaskEntity, mode TaskGroupMode) string {

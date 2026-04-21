@@ -8,6 +8,7 @@ import (
 )
 
 type TaskTableRow struct {
+	Type        TaskTableRowType
 	ID          string
 	ListID      string
 	Title       string
@@ -17,17 +18,30 @@ type TaskTableRow struct {
 	Estimate    string
 	DueDate     string
 	Assignees   string
+	Indent      int
+	CollapseKey string
+	HiddenBy    []string
+	Collapsed   bool
 }
+
+type TaskTableRowType string
+
+const (
+	TaskTableRowTask  TaskTableRowType = "task"
+	TaskTableRowGroup TaskTableRowType = "group"
+)
 
 type TaskTableModel struct {
 	rows            []TaskTableRow
+	allRows         []TaskTableRow
+	collapsed       map[string]bool
 	idx             int
 	x               int
 	displayedTaskID string
 }
 
 func NewTaskTable() TaskTableModel {
-	return TaskTableModel{rows: nil}
+	return TaskTableModel{rows: nil, collapsed: make(map[string]bool)}
 }
 
 func (m *TaskTableModel) Move(delta int) {
@@ -54,7 +68,8 @@ func (m *TaskTableModel) MoveHorizontal(delta int) {
 }
 
 func (m *TaskTableModel) SetRows(rows []TaskTableRow) {
-	m.rows = rows
+	m.allRows = rows
+	m.applyVisibility()
 	if len(m.rows) == 0 {
 		m.idx = 0
 		return
@@ -78,12 +93,107 @@ func (m TaskTableModel) RowByID(taskID string) (TaskTableRow, bool) {
 	if taskID == "" {
 		return TaskTableRow{}, false
 	}
-	for _, row := range m.rows {
+	for _, row := range m.allRows {
 		if row.ID == taskID {
 			return row, true
 		}
 	}
 	return TaskTableRow{}, false
+}
+
+func (m *TaskTableModel) ToggleSelectedCollapse() bool {
+	row, ok := m.Selected()
+	if !ok || row.CollapseKey == "" {
+		return false
+	}
+	if m.collapsed == nil {
+		m.collapsed = make(map[string]bool)
+	}
+	m.collapsed[row.CollapseKey] = !m.collapsed[row.CollapseKey]
+	m.applyVisibility()
+	if m.idx >= len(m.rows) {
+		m.idx = max(len(m.rows)-1, 0)
+	}
+	return true
+}
+
+func (m *TaskTableModel) CollapseAll() (bool, bool) {
+	if len(m.allRows) == 0 {
+		return false, false
+	}
+	if m.collapsed == nil {
+		m.collapsed = make(map[string]bool)
+	}
+	keys := make(map[string]struct{})
+	allCollapsed := true
+	for _, row := range m.allRows {
+		if row.CollapseKey == "" {
+			continue
+		}
+		keys[row.CollapseKey] = struct{}{}
+		if !m.collapsed[row.CollapseKey] {
+			allCollapsed = false
+		}
+	}
+	if len(keys) == 0 {
+		return false, false
+	}
+	targetCollapsed := true
+	if allCollapsed {
+		targetCollapsed = false
+	}
+
+	changed := false
+	for key := range keys {
+		if m.collapsed[key] != targetCollapsed {
+			m.collapsed[key] = targetCollapsed
+			changed = true
+		}
+	}
+	if changed {
+		m.applyVisibility()
+		if m.idx >= len(m.rows) {
+			m.idx = max(len(m.rows)-1, 0)
+		}
+	}
+	return changed, targetCollapsed
+}
+
+func (m *TaskTableModel) MoveToTop() {
+	m.idx = 0
+}
+
+func (m *TaskTableModel) MoveToBottom() {
+	if len(m.rows) == 0 {
+		m.idx = 0
+		return
+	}
+	m.idx = len(m.rows) - 1
+}
+
+func (m *TaskTableModel) applyVisibility() {
+	if m.collapsed == nil {
+		m.collapsed = make(map[string]bool)
+	}
+	visible := make([]TaskTableRow, 0, len(m.allRows))
+	for _, row := range m.allRows {
+		hidden := false
+		for _, key := range row.HiddenBy {
+			if m.collapsed[key] {
+				hidden = true
+				break
+			}
+		}
+		if hidden {
+			continue
+		}
+		copyRow := row
+		if copyRow.CollapseKey != "" {
+			copyRow.Collapsed = m.collapsed[copyRow.CollapseKey]
+		}
+		visible = append(visible, copyRow)
+	}
+	m.rows = visible
 }
 
 func (m *TaskTableModel) SetDisplayedTaskID(taskID string) {
@@ -100,6 +210,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
+	groupStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
 	displayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166"))
 	selectedDisplayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("33")).Bold(true)
 	_ = active
@@ -125,8 +236,19 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 	}
 
 	format := func(row TaskTableRow) string {
+		title := row.Title
+		if row.CollapseKey != "" {
+			if row.Collapsed {
+				title = "[+] " + title
+			} else {
+				title = "[-] " + title
+			}
+		}
+		if row.Indent > 0 {
+			title = strings.Repeat(" ", row.Indent) + title
+		}
 		parts := []string{
-			fitCell(row.Title, col[0]),
+			fitCell(title, col[0]),
 			fitCell(strings.ToUpper(row.Status), col[1]),
 			fitCell(priorityCellText(row.Priority), col[2]),
 			fitCell(row.DueDate, col[3]),
@@ -178,11 +300,25 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		}
 		if lineWidth > width {
 			line := prefix + format(row)
+			if row.Type == TaskTableRowGroup {
+				style = groupStyle.Copy().Inherit(style)
+			}
 			lines = append(lines, style.Render(lineWindow(line, width, xOffset)))
 			continue
 		}
 
-		titleCell := fitCell(row.Title, col[0])
+		titleValue := row.Title
+		if row.CollapseKey != "" {
+			if row.Collapsed {
+				titleValue = "[+] " + titleValue
+			} else {
+				titleValue = "[-] " + titleValue
+			}
+		}
+		if row.Indent > 0 {
+			titleValue = strings.Repeat(" ", row.Indent) + titleValue
+		}
+		titleCell := fitCell(titleValue, col[0])
 		statusCell := fitCell(strings.ToUpper(row.Status), col[1])
 		priorityCell := fitCell(priorityCellText(row.Priority), col[2])
 		dueDateCell := fitCell(row.DueDate, col[3])
@@ -194,6 +330,15 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		if isSelected && isDisplayed {
 			statusStyle = statusStyle.Bold(true)
 			priorityStyle = priorityStyle.Bold(true)
+		}
+		if row.Type == TaskTableRowGroup {
+			statusStyle = lipgloss.NewStyle()
+			priorityStyle = lipgloss.NewStyle()
+			if isSelected {
+				style = groupStyle.Copy().Inherit(style)
+			} else {
+				style = groupStyle
+			}
 		}
 
 		line := strings.Join([]string{

@@ -87,9 +87,31 @@ func (c *Client) GetLists(ctx context.Context, spaceID string) (*GetListsRespons
 }
 
 func (c *Client) GetTasks(ctx context.Context, listID string, filter provider.TaskFilter) (*GetTasksResponse, error) {
+	all := &GetTasksResponse{Tasks: []TaskDTO{}}
+	page := 0
+	for {
+		resp, err := c.getTasksPage(ctx, listID, filter, page)
+		if err != nil {
+			return nil, err
+		}
+		all.Tasks = append(all.Tasks, resp.Tasks...)
+		if resp.LastPage {
+			all.LastPage = true
+			break
+		}
+		page++
+		if page > 200 {
+			return nil, fmt.Errorf("clickup task pagination exceeded safety limit for list %s", listID)
+		}
+	}
+	return all, nil
+}
+
+func (c *Client) getTasksPage(ctx context.Context, listID string, filter provider.TaskFilter, page int) (*GetTasksResponse, error) {
 	values := url.Values{}
 	values.Set("include_closed", strconv.FormatBool(filter.IncludeClosed))
 	values.Set("subtasks", "true")
+	values.Set("page", strconv.Itoa(page))
 	if len(filter.Statuses) > 0 {
 		for _, status := range filter.Statuses {
 			values.Add("statuses[]", status)
