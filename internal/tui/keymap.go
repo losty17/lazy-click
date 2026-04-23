@@ -17,6 +17,7 @@ type Keymap struct {
 	GroupTasks   string
 	Subtasks     string
 	CollapseAll  string
+	MeMode       string
 }
 
 func DefaultKeymap() Keymap {
@@ -37,5 +38,6 @@ func DefaultKeymap() Keymap {
 		GroupTasks:   "g",
 		Subtasks:     "G",
 		CollapseAll:  "X",
+		MeMode:       "m",
 	}
 }

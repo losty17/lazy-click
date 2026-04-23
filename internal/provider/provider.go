@@ -3,6 +3,7 @@ package provider
 import "context"
 
 type ProjectProvider interface {
+	GetCurrentUser(ctx context.Context) (User, error)
 	GetSpaces(ctx context.Context) ([]Space, error)
 	GetLists(ctx context.Context, spaceID string) ([]TaskList, error)
 	GetTasks(ctx context.Context, listID string, filter TaskFilter) ([]Task, error)

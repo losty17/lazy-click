@@ -117,6 +117,11 @@ func (c *Client) getTasksPage(ctx context.Context, listID string, filter provide
 			values.Add("statuses[]", status)
 		}
 	}
+	if len(filter.AssigneeIDs) > 0 {
+		for _, id := range filter.AssigneeIDs {
+			values.Add("assignees[]", id)
+		}
+	}
 
 	path := "/list/" + listID + "/task"
 	if encoded := values.Encode(); encoded != "" {
@@ -128,6 +133,16 @@ func (c *Client) getTasksPage(ctx context.Context, listID string, filter provide
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) GetCurrentUser(ctx context.Context) (*UserDTO, error) {
+	var resp struct {
+		User UserDTO `json:"user"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/user", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp.User, nil
 }
 
 func (c *Client) GetTask(ctx context.Context, taskID string) (*TaskDTO, error) {

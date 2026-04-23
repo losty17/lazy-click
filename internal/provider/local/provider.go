@@ -49,6 +49,10 @@ func (p *Provider) ensureSeedData() error {
 	return nil
 }
 
+func (p *Provider) GetCurrentUser(ctx context.Context) (provider.User, error) {
+	return provider.User{ID: "local-user", Provider: ProviderType, Username: "you"}, nil
+}
+
 func (p *Provider) GetSpaces(ctx context.Context) ([]provider.Space, error) {
 	_ = ctx
 	if err := p.ensureSeedData(); err != nil {

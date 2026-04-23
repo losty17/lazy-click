@@ -10,6 +10,7 @@ type TaskListQuery struct {
 	Provider      string
 	ListID        string
 	Statuses      []string
+	AssigneeIDs   []string
 	Search        string
 	IncludeClosed bool
 	Limit         int
@@ -114,6 +115,12 @@ func (r *Repository) GetTasksByQuery(q TaskListQuery) ([]TaskEntity, error) {
 
 	if len(q.Statuses) > 0 {
 		stmt = stmt.Where("status IN ?", q.Statuses)
+	}
+	if len(q.AssigneeIDs) > 0 {
+		for _, id := range q.AssigneeIDs {
+			// Simplistic JSON search using LIKE. Works for basic user IDs in ClickUp's JSON format.
+			stmt = stmt.Where("assignees_json LIKE ?", "%\"id\":\""+id+"\"%")
+		}
 	}
 	if !q.IncludeClosed {
 		stmt = stmt.Where("status <> ?", "closed")

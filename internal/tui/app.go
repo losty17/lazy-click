@@ -37,6 +37,7 @@ const (
 	appStateCommandUsage     = "ui.control_center.command_usage"
 	appStateActiveProviderID = "ui.active_provider_id"
 	appStateClickUpToken     = "provider.clickup.oauth_token"
+	appStateMeMode           = "ui.me_mode"
 
 	detailDebounceDelay = 3 * time.Second
 	searchDebounceDelay = 250 * time.Millisecond
@@ -87,6 +88,7 @@ type uiSessionSnapshot struct {
 	TaskSubtasks    TaskSubtaskMode    `json:"task_subtasks"`
 	StatusFilter    string             `json:"status_filter"`
 	TaskSearchQuery string             `json:"task_search_query"`
+	MeMode          bool               `json:"me_mode"`
 	VimMode         bool               `json:"vim_mode"`
 }
 
@@ -116,6 +118,7 @@ const (
 )
 
 type SyncQueuer interface {
+	GetCurrentUser(ctx context.Context) (provider.User, error)
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
 	QueueAddComment(taskID string, text string, localCommentID string) error
 	Cycle(ctx context.Context) error
@@ -154,6 +157,8 @@ type RootModel struct {
 	taskSortMode        TaskSortMode
 	taskGroupMode       TaskGroupMode
 	taskSubtasks        TaskSubtaskMode
+	meMode              bool
+	currentUser         provider.User
 
 	statusFilter string
 	searchMode   bool
@@ -219,6 +224,7 @@ type dataLoadedMsg struct {
 	restoredSubtasks       TaskSubtaskMode
 	restoredStatus         string
 	restoredTaskSearch     string
+	restoredMeMode         bool
 	restoredVimMode        bool
 	restoredActiveProvider string
 	restorePolicy          RestorePolicy
@@ -267,6 +273,11 @@ type manualTaskRefreshResultMsg struct {
 	Err    error
 }
 
+type userLoadedMsg struct {
+	user provider.User
+	err  error
+}
+
 func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, statusLine string, clickUpClientID string, oauthBackendURL string, clickUpConnected bool, needsProviderSetup bool) RootModel {
 	if providerName == "" {
 		providerName = "none"
@@ -310,7 +321,7 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, 
 }
 
 func (m RootModel) Init() tea.Cmd {
-	return tea.Batch(m.loadDataCmd(), m.pollCmd())
+	return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd(), m.pollCmd())
 }
 
 func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -654,6 +665,15 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusLine = "Favorites-only lists disabled"
 			}
 			return m, m.loadDataCmd()
+		case m.keymap.MeMode:
+			m.meMode = !m.meMode
+			m.saveTaskPrefs()
+			if m.meMode {
+				m.statusLine = "Me Mode enabled (showing only your tasks)"
+			} else {
+				m.statusLine = "Me Mode disabled"
+			}
+			return m, m.loadDataCmd()
 		case m.keymap.Favorite:
 			if m.activePane == 0 {
 				if err := m.repo.ToggleListFavorite(m.selectedListID); err != nil {
@@ -683,6 +703,15 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case userLoadedMsg:
+		if msg.err == nil {
+			m.currentUser = msg.user
+			if m.meMode {
+				return m, m.loadDataCmd()
+			}
+		}
+		return m, nil
+
 	case dataLoadedMsg:
 		if msg.err != nil {
 			m.statusLine = "Load failed: " + msg.err.Error()
@@ -708,6 +737,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.statusFilter = msg.restoredStatus
 			m.searchQuery = msg.restoredTaskSearch
+			m.meMode = msg.restoredMeMode
 			m.vimMode = msg.restoredVimMode
 			if msg.restoredActiveProvider != "" && m.sync != nil {
 				if m.sync.SetActiveProvider(msg.restoredActiveProvider) {
@@ -1021,7 +1051,7 @@ func (m RootModel) View() string {
 		taskSearch = m.searchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s (%s) | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Task status: %s | Task search: %s | Vim mode: %t",
+		"Provider: %s (%s) | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Me Mode: %t | Task status: %s | Task search: %s | Vim mode: %t",
 		m.provider,
 		m.activeProviderID,
 		m.listSortMode,
@@ -1029,12 +1059,13 @@ func (m RootModel) View() string {
 		m.taskGroupMode,
 		m.taskSubtasks,
 		m.favoritesOnly,
+		m.meMode,
 		statusFilter,
 		taskSearch,
 		m.vimMode,
 	)
 
-	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.openTaskPrompt {
@@ -1046,7 +1077,7 @@ func (m RootModel) View() string {
 	} else if m.restorePrompt {
 		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
-		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -1147,6 +1178,16 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	return totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight
 }
 
+func (m RootModel) fetchCurrentUserCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.sync == nil {
+			return userLoadedMsg{err: fmt.Errorf("sync not available")}
+		}
+		user, err := m.sync.GetCurrentUser(context.Background())
+		return userLoadedMsg{user: user, err: err}
+	}
+}
+
 func (m RootModel) loadDataCmd() tea.Cmd {
 	if m.repo == nil {
 		return func() tea.Msg { return dataLoadedMsg{err: fmt.Errorf("cache repository unavailable")} }
@@ -1162,11 +1203,15 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	taskSortMode := m.taskSortMode
 	taskGroupMode := m.taskGroupMode
 	taskSubtaskMode := m.taskSubtasks
+	meMode := m.meMode
+	currentUserID := m.currentUser.ID
 
 	return func() tea.Msg {
 		msg := dataLoadedMsg{}
 		if !hydrated {
 			sortMode := cache.ListSortNameAsc
+			// ... (lines omitted for brevity, I will match carefully)
+
 			if sortRaw, err := m.repo.GetAppState(appStateListSortMode); err != nil {
 				return dataLoadedMsg{err: err}
 			} else if sortRaw == string(cache.ListSortMostRecentlyOpen) {
@@ -1224,6 +1269,14 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				return dataLoadedMsg{err: err}
 			} else {
 				taskSearch = taskSearchRaw
+			}
+
+			if meModeRaw, err := m.repo.GetAppState(appStateMeMode); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if meModeRaw != "" {
+				if parsed, parseErr := strconv.ParseBool(meModeRaw); parseErr == nil {
+					meMode = parsed
+				}
 			}
 
 			vimMode := false
@@ -1284,6 +1337,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoredSubtasks = taskSubtaskMode
 			msg.restoredStatus = statusFilter
 			msg.restoredTaskSearch = taskSearch
+			msg.restoredMeMode = meMode
 			msg.restoredVimMode = vimMode
 			msg.restorePolicy = restorePolicy
 			msg.hasRestoreSnapshot = hasSnapshot
@@ -1323,10 +1377,16 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			}
 		}
 
+		assigneeIDs := []string{}
+		if meMode && currentUserID != "" {
+			assigneeIDs = append(assigneeIDs, currentUserID)
+		}
+
 		tasks, err := m.repo.GetTasksByQuery(cache.TaskListQuery{
 			Provider:      activeProviderID,
 			ListID:        selectedListID,
 			Statuses:      selectedStatusFilter(statusFilter),
+			AssigneeIDs:   assigneeIDs,
 			IncludeClosed: true,
 		})
 		if err != nil {
@@ -1941,7 +2001,7 @@ func (m *RootModel) switchToNextProviderCmd() tea.Cmd {
 		next = (idx + 1) % len(m.availableProviders)
 	}
 	if m.switchProvider(m.availableProviders[next].ID) {
-		return m.loadDataCmd()
+		return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd())
 	}
 	return nil
 }

@@ -434,6 +434,12 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.saveListPrefs()
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
+	case "toggle_me_mode":
+		m.meMode = !m.meMode
+		m.statusLine = fmt.Sprintf("Me Mode: %t", m.meMode)
+		m.saveTaskPrefs()
+		m.persistSessionSnapshot()
+		return m.loadDataCmd()
 	case "toggle_list_sort":
 		if m.listSortMode == cache.ListSortMostRecentlyOpen {
 			m.listSortMode = cache.ListSortNameAsc
@@ -519,7 +525,7 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		if strings.HasPrefix(id, "provider_switch:") {
 			providerID := strings.TrimPrefix(id, "provider_switch:")
 			if m.switchProvider(providerID) {
-				return m.loadDataCmd()
+				return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd())
 			}
 			return nil
 		}
@@ -534,6 +540,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},
 		{ID: "connect_clickup_oauth", Title: "Connect ClickUp (OAuth)", Subtitle: "Authorize and save ClickUp token", Badge: "oauth", Aliases: []string{"clickup oauth", "connect clickup"}},
+		{ID: "toggle_me_mode", Title: "Toggle Me Mode", Subtitle: "Filter tasks by current user", Badge: "toggle", Aliases: []string{"me mode", "only me"}},
 		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}},
 		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}},
 		{ID: "cycle_task_sort", Title: "Cycle task sort", Subtitle: "Rotate current task sort mode", Badge: "toggle", Aliases: []string{"sort tasks", "task sort"}},
@@ -607,6 +614,7 @@ func (m *RootModel) saveTaskPrefs() {
 	_ = m.repo.SaveAppState(appStateTaskSubtasksMode, string(m.taskSubtasks))
 	_ = m.repo.SaveAppState(appStateStatusFilter, m.statusFilter)
 	_ = m.repo.SaveAppState(appStateTaskSearchQuery, m.searchQuery)
+	_ = m.repo.SaveAppState(appStateMeMode, fmt.Sprintf("%t", m.meMode))
 	_ = m.repo.SaveAppState(appStateVimModeEnabled, fmt.Sprintf("%t", m.vimMode))
 	_ = m.repo.SaveAppState(appStateRestorePolicy, string(m.restorePolicy))
 }
@@ -644,6 +652,7 @@ func (m *RootModel) applySessionSnapshot(snapshot uiSessionSnapshot) {
 	}
 	m.statusFilter = snapshot.StatusFilter
 	m.searchQuery = snapshot.TaskSearchQuery
+	m.meMode = snapshot.MeMode
 	m.vimMode = snapshot.VimMode
 	if m.activePane < 0 || m.activePane > 2 {
 		m.activePane = 0
@@ -663,6 +672,7 @@ func (m *RootModel) currentSnapshot() uiSessionSnapshot {
 		TaskSubtasks:    m.taskSubtasks,
 		StatusFilter:    m.statusFilter,
 		TaskSearchQuery: m.searchQuery,
+		MeMode:          m.meMode,
 		VimMode:         m.vimMode,
 	}
 }

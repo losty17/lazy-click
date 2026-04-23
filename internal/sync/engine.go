@@ -2,6 +2,7 @@ package syncengine
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -40,6 +41,16 @@ func NewEngine(repo *cache.Repository, providerKey string, provider provider.Pro
 
 func (e *Engine) ProviderKey() string {
 	return e.providerKey
+}
+
+func (e *Engine) GetCurrentUser(ctx context.Context) (provider.User, error) {
+	e.mu.RLock()
+	p := e.provider
+	e.mu.RUnlock()
+	if p == nil {
+		return provider.User{}, fmt.Errorf("provider not set")
+	}
+	return p.GetCurrentUser(ctx)
 }
 
 func (e *Engine) SetActiveProvider(providerID string) bool {

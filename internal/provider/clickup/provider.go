@@ -24,6 +24,19 @@ func NewFromToken(token string) *Provider {
 	}
 }
 
+func (p *Provider) GetCurrentUser(ctx context.Context) (provider.User, error) {
+	u, err := p.client.GetCurrentUser(ctx)
+	if err != nil {
+		return provider.User{}, err
+	}
+	return provider.User{
+		ID:       u.ID.String(),
+		Provider: "clickup",
+		Username: u.Username,
+		Email:    u.Email,
+	}, nil
+}
+
 func (p *Provider) GetSpaces(ctx context.Context) ([]provider.Space, error) {
 	resp, err := p.client.GetSpaces(ctx)
 	if err != nil {

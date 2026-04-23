@@ -81,6 +81,14 @@ func (r *Router) QueueTaskUpdate(taskID string, update provider.TaskUpdate) erro
 	return node.engine.QueueTaskUpdate(taskID, update)
 }
 
+func (r *Router) GetCurrentUser(ctx context.Context) (provider.User, error) {
+	node, err := r.activeNode()
+	if err != nil {
+		return provider.User{}, err
+	}
+	return node.engine.GetCurrentUser(ctx)
+}
+
 func (r *Router) QueueAddComment(taskID string, text string, localCommentID string) error {
 	node, err := r.activeNode()
 	if err != nil {
