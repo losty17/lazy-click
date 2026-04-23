@@ -187,6 +187,13 @@ func (r *Repository) SaveComments(comments []CommentEntity) error {
 	})
 }
 
+func (r *Repository) DeleteCommentByID(commentID string) error {
+	if commentID == "" {
+		return nil
+	}
+	return r.db.Delete(&CommentEntity{}, "id = ?", commentID).Error
+}
+
 func MarshalPayload(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {

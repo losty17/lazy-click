@@ -180,6 +180,29 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 	return task, nil
 }
 
+func (p *Provider) GetTaskComments(ctx context.Context, taskID string) ([]provider.Comment, error) {
+	resp, err := p.client.GetTaskComments(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.Comment, 0, len(resp.Comments))
+	for _, c := range resp.Comments {
+		out = append(out, provider.Comment{
+			ID:     c.ID,
+			TaskID: taskID,
+			Author: provider.User{
+				ID:       c.User.ID.String(),
+				Provider: "clickup",
+				Username: c.User.Username,
+				Email:    c.User.Email,
+			},
+			BodyMD:        decodeCommentText(c.Comment),
+			CreatedAtUnix: parseUnixOrZero(c.Date),
+		})
+	}
+	return out, nil
+}
+
 func (p *Provider) UpdateTask(ctx context.Context, taskID string, data provider.TaskUpdate) (provider.Task, error) {
 	update := UpdateTaskRequest{
 		Name:        data.Title,

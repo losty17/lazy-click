@@ -115,6 +115,29 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 	return mapEntityToTask(*row), nil
 }
 
+func (p *Provider) GetTaskComments(ctx context.Context, taskID string) ([]provider.Comment, error) {
+	_ = ctx
+	rows, err := p.repo.GetTaskComments(taskID, 200)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.Comment, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, provider.Comment{
+			ID:     row.ID,
+			TaskID: row.TaskID,
+			Author: provider.User{
+				ID:       row.AuthorID,
+				Provider: ProviderType,
+				Username: row.AuthorName,
+			},
+			BodyMD:        row.BodyMD,
+			CreatedAtUnix: row.CreatedAtUnix,
+		})
+	}
+	return out, nil
+}
+
 func (p *Provider) UpdateTask(ctx context.Context, taskID string, data provider.TaskUpdate) (provider.Task, error) {
 	_ = ctx
 	row, err := p.repo.GetTaskByID(taskID)

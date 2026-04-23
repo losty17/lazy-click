@@ -20,8 +20,9 @@ type updateTaskPayload struct {
 }
 
 type addCommentPayload struct {
-	TaskID string `json:"task_id"`
-	Text   string `json:"text"`
+	TaskID         string `json:"task_id"`
+	Text           string `json:"text"`
+	LocalCommentID string `json:"local_comment_id,omitempty"`
 }
 
 func (e *Engine) PushOnce(ctx context.Context) error {
@@ -56,8 +57,25 @@ func (e *Engine) applyQueueItem(ctx context.Context, item cache.SyncQueueEntity)
 		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
 			return err
 		}
-		_, err := e.provider.AddComment(ctx, payload.TaskID, payload.Text)
-		return err
+		comment, err := e.provider.AddComment(ctx, payload.TaskID, payload.Text)
+		if err != nil {
+			return err
+		}
+		if payload.LocalCommentID != "" {
+			_ = e.repo.DeleteCommentByID(payload.LocalCommentID)
+		}
+		authorName := comment.Author.Username
+		if authorName == "" {
+			authorName = comment.Author.Email
+		}
+		return e.repo.SaveComments([]cache.CommentEntity{{
+			ID:            comment.ID,
+			TaskID:        comment.TaskID,
+			AuthorID:      comment.Author.ID,
+			AuthorName:    authorName,
+			BodyMD:        comment.BodyMD,
+			CreatedAtUnix: comment.CreatedAtUnix,
+		}})
 	default:
 		return fmt.Errorf("unsupported queue operation: %s", item.Operation)
 	}

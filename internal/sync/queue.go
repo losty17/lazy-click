@@ -33,10 +33,11 @@ func (e *Engine) QueueTaskUpdate(taskID string, update provider.TaskUpdate) erro
 	})
 }
 
-func (e *Engine) QueueAddComment(taskID string, text string) error {
+func (e *Engine) QueueAddComment(taskID string, text string, localCommentID string) error {
 	payload, err := cache.MarshalPayload(addCommentPayload{
-		TaskID: taskID,
-		Text:   text,
+		TaskID:         taskID,
+		Text:           text,
+		LocalCommentID: localCommentID,
 	})
 	if err != nil {
 		return err

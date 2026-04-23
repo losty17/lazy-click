@@ -167,7 +167,40 @@ func (e *Engine) RevalidateTask(ctx context.Context, taskID string) error {
 		e.setSyncStatus("task revalidate failed")
 		return err
 	}
+	if err := e.syncTaskComments(ctx, taskID); err != nil {
+		e.setSyncStatus("task comments sync failed")
+		return err
+	}
 	e.setSyncStatus("task revalidated")
+	return nil
+}
+
+func (e *Engine) syncTaskComments(ctx context.Context, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	comments, err := e.provider.GetTaskComments(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	rows := make([]cache.CommentEntity, 0, len(comments))
+	for _, comment := range comments {
+		authorName := comment.Author.Username
+		if authorName == "" {
+			authorName = comment.Author.Email
+		}
+		rows = append(rows, cache.CommentEntity{
+			ID:            comment.ID,
+			TaskID:        taskID,
+			AuthorID:      comment.Author.ID,
+			AuthorName:    authorName,
+			BodyMD:        comment.BodyMD,
+			CreatedAtUnix: comment.CreatedAtUnix,
+		})
+	}
+	if err := e.repo.SaveComments(rows); err != nil {
+		return err
+	}
 	return nil
 }
 

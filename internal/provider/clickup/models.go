@@ -135,6 +135,17 @@ type AddCommentResponse struct {
 	User    UserDTO         `json:"user"`
 }
 
+type GetTaskCommentsResponse struct {
+	Comments []CommentDTO `json:"comments"`
+}
+
+type CommentDTO struct {
+	ID      string          `json:"id"`
+	Comment json.RawMessage `json:"comment"`
+	Date    string          `json:"date"`
+	User    UserDTO         `json:"user"`
+}
+
 type UserDTO struct {
 	ID       ClickUpID `json:"id"`
 	Username string    `json:"username"`

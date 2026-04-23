@@ -133,6 +133,9 @@ func breakLines(s string, width int) []string {
 		if breakPoint == -1 {
 			breakPoint = width
 		}
+		if breakPoint == 0 {
+			breakPoint = 1
+		}
 		lines = append(lines, strings.Trim(s[:breakPoint], " "))
 		s = s[breakPoint:]
 	}

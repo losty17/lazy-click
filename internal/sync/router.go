@@ -81,12 +81,12 @@ func (r *Router) QueueTaskUpdate(taskID string, update provider.TaskUpdate) erro
 	return node.engine.QueueTaskUpdate(taskID, update)
 }
 
-func (r *Router) QueueAddComment(taskID string, text string) error {
+func (r *Router) QueueAddComment(taskID string, text string, localCommentID string) error {
 	node, err := r.activeNode()
 	if err != nil {
 		return err
 	}
-	return node.engine.QueueAddComment(taskID, text)
+	return node.engine.QueueAddComment(taskID, text, localCommentID)
 }
 
 func (r *Router) Cycle(ctx context.Context) error {

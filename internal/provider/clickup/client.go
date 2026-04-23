@@ -138,6 +138,14 @@ func (c *Client) GetTask(ctx context.Context, taskID string) (*TaskDTO, error) {
 	return &resp, nil
 }
 
+func (c *Client) GetTaskComments(ctx context.Context, taskID string) (*GetTaskCommentsResponse, error) {
+	var resp GetTaskCommentsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/task/"+taskID+"/comment", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) UpdateTask(ctx context.Context, taskID string, req UpdateTaskRequest) error {
 	return c.doJSON(ctx, http.MethodPut, "/task/"+taskID, req, nil)
 }

@@ -39,6 +39,7 @@ const (
 	appStateClickUpToken     = "provider.clickup.oauth_token"
 
 	detailDebounceDelay = 3 * time.Second
+	searchDebounceDelay = 250 * time.Millisecond
 )
 
 type RestorePolicy string
@@ -116,7 +117,7 @@ const (
 
 type SyncQueuer interface {
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
-	QueueAddComment(taskID string, text string) error
+	QueueAddComment(taskID string, text string, localCommentID string) error
 	Cycle(ctx context.Context) error
 	SyncList(ctx context.Context, listID string) error
 	SetActiveListID(listID string)
@@ -159,6 +160,7 @@ type RootModel struct {
 	searchInput  string
 	searchQuery  string
 	searchBackup string
+	searchReqToken int64
 
 	listSearchQuery       string
 	listSortMode          cache.ListSortMode
@@ -182,13 +184,15 @@ type RootModel struct {
 	commandUsage    map[string]commandUsageStat
 	loadedTasks     []cache.TaskEntity
 
-	commentMode   bool
-	commentInput  string
-	commentTaskID string
-	syncing       bool
-	syncFrame     int
-	syncError     string
-	syncDetail    string
+	commentMode    bool
+	commentInput   string
+	commentTaskID  string
+	openTaskPrompt bool
+	openTaskURL    string
+	syncing        bool
+	syncFrame      int
+	syncError      string
+	syncDetail     string
 
 	selectedTaskID   string
 	displayedTaskID  string
@@ -227,6 +231,13 @@ type dataLoadedMsg struct {
 type editResultMsg struct{ err error }
 type syncResultMsg struct{ err error }
 type commentResultMsg struct{ err error }
+type copyTaskLinkResultMsg struct {
+	url string
+	err error
+}
+type openTaskInBrowserResultMsg struct {
+	err error
+}
 type oauthResultMsg struct {
 	providerID string
 	token      string
@@ -234,6 +245,11 @@ type oauthResultMsg struct {
 }
 type pollTickMsg struct{}
 type syncTickMsg struct{}
+
+type searchDebounceMsg struct {
+	Query string
+	Token int64
+}
 
 type detailRevalidateTickMsg struct {
 	TaskID string
@@ -389,6 +405,29 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.updateControlCenter(msg)
 		}
 
+		if m.openTaskPrompt {
+			switch msg.Type {
+			case tea.KeyEnter:
+				m.openTaskPrompt = false
+				return m, m.openTaskInBrowserCmd(m.openTaskURL)
+			case tea.KeyEsc:
+				m.openTaskPrompt = false
+				m.openTaskURL = ""
+				m.statusLine = "Open task canceled"
+				return m, nil
+			}
+			switch strings.ToLower(msg.String()) {
+			case "y":
+				m.openTaskPrompt = false
+				return m, m.openTaskInBrowserCmd(m.openTaskURL)
+			case "n":
+				m.openTaskPrompt = false
+				m.openTaskURL = ""
+				m.statusLine = "Open task canceled"
+			}
+			return m, nil
+		}
+
 		if m.commentMode {
 			switch msg.Type {
 			case tea.KeyEsc:
@@ -443,10 +482,27 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.searchQuery = strings.TrimSpace(m.searchInput)
 			m.saveTaskPrefs()
-			return m, m.loadDataCmd()
+			m.searchReqToken++
+			token := m.searchReqToken
+			query := m.searchQuery
+			return m, tea.Tick(searchDebounceDelay, func(t time.Time) tea.Msg {
+				return searchDebounceMsg{Query: query, Token: token}
+			})
 		}
 
 		prevListID := m.selectedListID
+		if msg.Type == tea.KeyEnter && m.activePane == 2 {
+			url := m.currentTaskBrowserURL()
+			if strings.TrimSpace(url) == "" {
+				m.statusLine = "No browser URL available for selected task"
+				return m, nil
+			}
+			m.openTaskPrompt = true
+			m.openTaskURL = url
+			m.statusLine = "Open task in browser? Press Enter/Y to confirm or N/Esc to cancel"
+			return m, nil
+		}
+
 		if msg.Type == tea.KeyEnter && m.activePane == 1 {
 			selectedRow, ok := m.taskTable.Selected()
 			if !ok {
@@ -552,6 +608,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusLine = "Task title: " + row.Title
 				return m, nil
 			}
+		case m.keymap.CopyTaskLink:
+			return m, m.copyTaskLinkCmd()
 		case m.keymap.SortLists:
 			if m.listSortMode == cache.ListSortMostRecentlyOpen {
 				m.listSortMode = cache.ListSortNameAsc
@@ -809,6 +867,23 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusLine = "Comment saved locally and queued for provider push"
 		return m, m.loadDataCmd()
 
+	case copyTaskLinkResultMsg:
+		if msg.err != nil {
+			m.statusLine = "Copy task link failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.statusLine = "Task link copied: " + msg.url
+		return m, nil
+
+	case openTaskInBrowserResultMsg:
+		m.openTaskURL = ""
+		if msg.err != nil {
+			m.statusLine = "Open in browser failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.statusLine = "Opened task in browser"
+		return m, nil
+
 	case oauthResultMsg:
 		if msg.err != nil {
 			m.statusLine = "OAuth failed: " + msg.err.Error()
@@ -832,6 +907,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pollTickMsg:
 		return m, tea.Batch(m.loadDataCmd(), m.pollCmd())
+
+	case searchDebounceMsg:
+		if msg.Token != m.searchReqToken {
+			return m, nil
+		}
+		return m, m.loadDataCmd()
 
 	case syncTickMsg:
 		if !m.syncing {
@@ -953,9 +1034,11 @@ func (m RootModel) View() string {
 		m.vimMode,
 	)
 
-	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
+	} else if m.openTaskPrompt {
+		help = "Open task prompt: Enter/Y confirm, N/Esc cancel"
 	} else if m.searchMode {
 		help = fmt.Sprintf("Task search mode: %s (type to filter, Enter apply, Esc cancel)", m.searchInput)
 	} else if m.controlOpen {
@@ -963,7 +1046,7 @@ func (m RootModel) View() string {
 	} else if m.restorePrompt {
 		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
-		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -994,6 +1077,11 @@ func (m RootModel) View() string {
 	}
 	if m.providerNeedsConnectionOverlay() {
 		overlay := m.renderProviderConnectOverlay(totalWidth)
+		y := centeredOverlayY(screen, overlay, -1)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.openTaskPrompt {
+		overlay := m.renderOpenTaskPromptOverlay(totalWidth)
 		y := centeredOverlayY(screen, overlay, -1)
 		screen = overlayCentered(screen, overlay, totalWidth, y)
 	}
@@ -1321,6 +1409,65 @@ func (m RootModel) renderProviderConnectOverlay(width int) string {
 	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
 
+func (m RootModel) renderOpenTaskPromptOverlay(width int) string {
+	panelWidth := min(max(width-6, 56), 110)
+	urlLine := truncateLine(m.openTaskURL, panelWidth-2)
+	lines := []string{
+		ControlCenterTitleStyle.Render(truncateLine("Open task in browser?", panelWidth-2)),
+		"",
+		truncateLine("This will open your default browser for the selected task.", panelWidth-2),
+		"",
+		truncateLine(urlLine, panelWidth-2),
+		"",
+		HelpStyle.Render("Enter/Y confirm, N/Esc cancel"),
+	}
+	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (m RootModel) currentTaskBrowserURL() string {
+	row, ok := m.displayedTaskRow()
+	if !ok {
+		row, ok = m.taskTable.Selected()
+		if !ok {
+			return ""
+		}
+	}
+	if strings.TrimSpace(row.ID) == "" {
+		return ""
+	}
+	return "https://app.clickup.com/t/" + row.ID
+}
+
+func (m RootModel) copyTaskLinkCmd() tea.Cmd {
+	url := m.currentTaskBrowserURL()
+	if strings.TrimSpace(url) == "" {
+		return func() tea.Msg {
+			return copyTaskLinkResultMsg{err: fmt.Errorf("no task selected")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		defer cancel()
+		if err := copyToClipboard(ctx, url); err != nil {
+			return copyTaskLinkResultMsg{url: url, err: err}
+		}
+		return copyTaskLinkResultMsg{url: url}
+	}
+}
+
+func (m RootModel) openTaskInBrowserCmd(url string) tea.Cmd {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return func() tea.Msg { return openTaskInBrowserResultMsg{err: fmt.Errorf("task URL is empty")} }
+	}
+	return func() tea.Msg {
+		if err := openBrowser(url); err != nil {
+			return openTaskInBrowserResultMsg{err: err}
+		}
+		return openTaskInBrowserResultMsg{}
+	}
+}
+
 func (m RootModel) selectedListIDFromSidebar() string {
 	if len(m.lists) == 0 {
 		return ""
@@ -1583,8 +1730,9 @@ func (m RootModel) submitCommentCmd() tea.Cmd {
 
 	return func() tea.Msg {
 		now := time.Now().UnixMilli()
+		localCommentID := fmt.Sprintf("local-%d", now)
 		if err := m.repo.SaveComments([]cache.CommentEntity{{
-			ID:            fmt.Sprintf("local-%d", now),
+			ID:            localCommentID,
 			TaskID:        taskID,
 			AuthorName:    "you",
 			BodyMD:        text,
@@ -1592,7 +1740,7 @@ func (m RootModel) submitCommentCmd() tea.Cmd {
 		}}); err != nil {
 			return commentResultMsg{err: err}
 		}
-		if err := m.sync.QueueAddComment(taskID, text); err != nil {
+		if err := m.sync.QueueAddComment(taskID, text, localCommentID); err != nil {
 			return commentResultMsg{err: err}
 		}
 		return commentResultMsg{}
@@ -2356,14 +2504,14 @@ func fuzzyScoreTask(task cache.TaskEntity, query string) (int, bool) {
 		due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
 	}
 
+	// High-priority fields
 	fields := []string{
 		task.Title,
 		task.Status,
 		task.PriorityLabel,
 		due,
-		task.DescriptionMD,
-		task.CustomFieldsJSON,
 	}
+	
 	bestScore := 0
 	matched := false
 	for _, field := range fields {
@@ -2376,14 +2524,48 @@ func fuzzyScoreTask(task cache.TaskEntity, query string) (int, bool) {
 		}
 		matched = true
 	}
+
+	// Low-priority / potentially large fields - only search if no good match yet or for long queries
+	// Limit search in large fields to avoid extreme memory pressure
+	if len(task.DescriptionMD) > 0 && len(task.DescriptionMD) < 5000 {
+		if score, ok := fuzzyScoreField(query, task.DescriptionMD); ok {
+			if !matched || score > bestScore {
+				bestScore = score
+			}
+			matched = true
+		}
+	} else if len(task.DescriptionMD) >= 5000 {
+		// For very large descriptions, use a simple case-insensitive check instead of full fuzzy
+		if strings.Contains(strings.ToLower(task.DescriptionMD), query) {
+			score := 500 // Base score for large field match
+			if !matched || score > bestScore {
+				bestScore = score
+			}
+			matched = true
+		}
+	}
+
+	if len(task.CustomFieldsJSON) > 0 && len(task.CustomFieldsJSON) < 2000 {
+		if score, ok := fuzzyScoreField(query, task.CustomFieldsJSON); ok {
+			if !matched || score > bestScore {
+				bestScore = score
+			}
+			matched = true
+		}
+	}
+
 	return bestScore, matched
 }
 
 func fuzzyScoreField(query string, candidate string) (int, bool) {
-	candidate = normalizeSearchText(candidate)
 	if query == "" {
 		return 0, true
 	}
+	if candidate == "" {
+		return 0, false
+	}
+	
+	candidate = normalizeSearchText(candidate)
 	if candidate == "" {
 		return 0, false
 	}
@@ -2424,10 +2606,8 @@ func fuzzyScoreField(query string, candidate string) (int, bool) {
 }
 
 func normalizeSearchText(s string) string {
-	s = strings.ToLower(s)
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
-	return strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
