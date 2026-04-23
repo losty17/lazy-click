@@ -455,6 +455,11 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.saveTaskPrefs()
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
+	case "toggle_task_sort_direction":
+		m.toggleTaskSortDirection()
+		m.saveTaskPrefs()
+		m.persistSessionSnapshot()
+		return m.loadDataCmd()
 	case "cycle_task_group":
 		m.cycleTaskGroup(1)
 		m.saveTaskPrefs()
@@ -544,6 +549,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}},
 		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}},
 		{ID: "cycle_task_sort", Title: "Cycle task sort", Subtitle: "Rotate current task sort mode", Badge: "toggle", Aliases: []string{"sort tasks", "task sort"}},
+		{ID: "toggle_task_sort_direction", Title: "Toggle task sort direction", Subtitle: "Switch asc/desc task sorting", Badge: "toggle", Aliases: []string{"sort direction", "task sort direction"}},
 		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}},
 		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
@@ -610,6 +616,7 @@ func (m *RootModel) saveTaskPrefs() {
 		return
 	}
 	_ = m.repo.SaveAppState(appStateTaskSortMode, string(m.taskSortMode))
+	_ = m.repo.SaveAppState(appStateTaskSortDirection, string(m.taskSortDirection))
 	_ = m.repo.SaveAppState(appStateTaskGroupMode, string(m.taskGroupMode))
 	_ = m.repo.SaveAppState(appStateTaskSubtasksMode, string(m.taskSubtasks))
 	_ = m.repo.SaveAppState(appStateStatusFilter, m.statusFilter)
@@ -644,6 +651,9 @@ func (m *RootModel) applySessionSnapshot(snapshot uiSessionSnapshot) {
 	if snapshot.TaskSortMode != "" {
 		m.taskSortMode = snapshot.TaskSortMode
 	}
+	if snapshot.TaskSortDirection != "" {
+		m.taskSortDirection = snapshot.TaskSortDirection
+	}
 	if snapshot.TaskGroupMode != "" {
 		m.taskGroupMode = snapshot.TaskGroupMode
 	}
@@ -668,6 +678,7 @@ func (m *RootModel) currentSnapshot() uiSessionSnapshot {
 		ListSortMode:    m.listSortMode,
 		FavoritesOnly:   m.favoritesOnly,
 		TaskSortMode:    m.taskSortMode,
+		TaskSortDirection: m.taskSortDirection,
 		TaskGroupMode:   m.taskGroupMode,
 		TaskSubtasks:    m.taskSubtasks,
 		StatusFilter:    m.statusFilter,

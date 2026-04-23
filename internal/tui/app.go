@@ -26,6 +26,7 @@ const (
 	appStateListSearchQuery  = "ui.list_search_query"
 	appStateFavoritesOnly    = "ui.list_favorites_only"
 	appStateTaskSortMode     = "ui.task_sort_mode"
+	appStateTaskSortDirection = "ui.task_sort_direction"
 	appStateTaskGroupMode    = "ui.task_group_mode"
 	appStateTaskSubtasksMode = "ui.task_subtasks_mode"
 	appStateStatusFilter     = "ui.status_filter"
@@ -84,6 +85,7 @@ type uiSessionSnapshot struct {
 	ListSortMode    cache.ListSortMode `json:"list_sort_mode"`
 	FavoritesOnly   bool               `json:"favorites_only"`
 	TaskSortMode    TaskSortMode       `json:"task_sort_mode"`
+	TaskSortDirection TaskSortDirection `json:"task_sort_direction"`
 	TaskGroupMode   TaskGroupMode      `json:"task_group_mode"`
 	TaskSubtasks    TaskSubtaskMode    `json:"task_subtasks"`
 	StatusFilter    string             `json:"status_filter"`
@@ -100,6 +102,13 @@ const (
 	TaskSortStatus   TaskSortMode = "status"
 	TaskSortAssignee TaskSortMode = "assignee"
 	TaskSortDueDate  TaskSortMode = "due"
+)
+
+type TaskSortDirection string
+
+const (
+	TaskSortAsc  TaskSortDirection = "asc"
+	TaskSortDesc TaskSortDirection = "desc"
 )
 
 type TaskGroupMode string
@@ -155,6 +164,7 @@ type RootModel struct {
 	detailPanel         components.DetailModel
 	statuses            []string
 	taskSortMode        TaskSortMode
+	taskSortDirection   TaskSortDirection
 	taskGroupMode       TaskGroupMode
 	taskSubtasks        TaskSubtaskMode
 	meMode              bool
@@ -220,6 +230,7 @@ type dataLoadedMsg struct {
 	restoredSortMode       cache.ListSortMode
 	restoredFavOnly        bool
 	restoredTaskSort       TaskSortMode
+	restoredTaskSortDir    TaskSortDirection
 	restoredTaskGroup      TaskGroupMode
 	restoredSubtasks       TaskSubtaskMode
 	restoredStatus         string
@@ -311,6 +322,7 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, 
 		detailPanel:         components.NewDetail(),
 		listSortMode:        cache.ListSortNameAsc,
 		taskSortMode:        TaskSortPriority,
+		taskSortDirection:   TaskSortAsc,
 		taskGroupMode:       TaskGroupNone,
 		taskSubtasks:        TaskSubtaskFlat,
 		favoritesOnly:       false,
@@ -634,6 +646,10 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cycleTaskSort(1)
 			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
+		case m.keymap.SortDirection:
+			m.toggleTaskSortDirection()
+			m.saveTaskPrefs()
+			return m, m.loadDataCmd()
 		case m.keymap.GroupTasks:
 			m.cycleTaskGroup(1)
 			m.saveTaskPrefs()
@@ -728,6 +744,9 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.favoritesOnly = msg.restoredFavOnly
 			if msg.restoredTaskSort != "" {
 				m.taskSortMode = msg.restoredTaskSort
+			}
+			if msg.restoredTaskSortDir != "" {
+				m.taskSortDirection = msg.restoredTaskSortDir
 			}
 			if msg.restoredTaskGroup != "" {
 				m.taskGroupMode = msg.restoredTaskGroup
@@ -1051,11 +1070,12 @@ func (m RootModel) View() string {
 		taskSearch = m.searchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s (%s) | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Me Mode: %t | Task status: %s | Task search: %s | Vim mode: %t",
+		"Provider: %s (%s) | List sort: %s | Task sort: %s (%s) | Task group: %s | Subtasks: %s | Favorites-only: %t | Me Mode: %t | Task status: %s | Task search: %s | Vim mode: %t",
 		m.provider,
 		m.activeProviderID,
 		m.listSortMode,
 		m.taskSortMode,
+		m.taskSortDirection,
 		m.taskGroupMode,
 		m.taskSubtasks,
 		m.favoritesOnly,
@@ -1065,7 +1085,7 @@ func (m RootModel) View() string {
 		m.vimMode,
 	)
 
-	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.openTaskPrompt {
@@ -1077,7 +1097,7 @@ func (m RootModel) View() string {
 	} else if m.restorePrompt {
 		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
-		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -1201,6 +1221,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 	statusFilter := m.statusFilter
 	taskSearch := m.searchQuery
 	taskSortMode := m.taskSortMode
+	taskSortDirection := m.taskSortDirection
 	taskGroupMode := m.taskGroupMode
 	taskSubtaskMode := m.taskSubtasks
 	meMode := m.meMode
@@ -1243,6 +1264,13 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				return dataLoadedMsg{err: err}
 			} else if parsed := TaskSortMode(sortRaw); parsed != "" {
 				taskSortMode = parsed
+			}
+
+			taskSortDirection = TaskSortAsc
+			if dirRaw, err := m.repo.GetAppState(appStateTaskSortDirection); err != nil {
+				return dataLoadedMsg{err: err}
+			} else if parsed := TaskSortDirection(dirRaw); parsed != "" {
+				taskSortDirection = parsed
 			}
 
 			taskGroupMode = TaskGroupNone
@@ -1333,6 +1361,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoredSortMode = currentSort
 			msg.restoredFavOnly = currentFavOnly
 			msg.restoredTaskSort = taskSortMode
+			msg.restoredTaskSortDir = taskSortDirection
 			msg.restoredTaskGroup = taskGroupMode
 			msg.restoredSubtasks = taskSubtaskMode
 			msg.restoredStatus = statusFilter
@@ -1393,7 +1422,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			return dataLoadedMsg{err: err}
 		}
 		tasks = fuzzyFindTasks(tasks, taskSearch)
-		tasks = organizeTasks(tasks, taskSortMode, taskGroupMode, taskSubtaskMode)
+		tasks = organizeTasks(tasks, taskSortMode, taskSortDirection, taskGroupMode, taskSubtaskMode)
 
 		statuses, err := m.repo.GetTaskStatusesByList(selectedListID)
 		if err != nil {
@@ -1854,7 +1883,16 @@ func (m *RootModel) cycleTaskSort(step int) {
 		next += len(options)
 	}
 	m.taskSortMode = options[next]
-	m.statusLine = "Task sort: " + string(m.taskSortMode)
+	m.statusLine = "Task sort: " + string(m.taskSortMode) + " (" + string(m.taskSortDirection) + ")"
+}
+
+func (m *RootModel) toggleTaskSortDirection() {
+	if m.taskSortDirection == TaskSortAsc {
+		m.taskSortDirection = TaskSortDesc
+	} else {
+		m.taskSortDirection = TaskSortAsc
+	}
+	m.statusLine = "Task sort: " + string(m.taskSortMode) + " (" + string(m.taskSortDirection) + ")"
 }
 
 func (m *RootModel) cycleTaskGroup(step int) {
@@ -2295,7 +2333,7 @@ func fuzzyFindTasks(tasks []cache.TaskEntity, query string) []cache.TaskEntity {
 	return out
 }
 
-func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, groupMode TaskGroupMode, subtaskMode TaskSubtaskMode) []cache.TaskEntity {
+func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, sortDir TaskSortDirection, groupMode TaskGroupMode, subtaskMode TaskSubtaskMode) []cache.TaskEntity {
 	if len(tasks) <= 1 {
 		return tasks
 	}
@@ -2312,6 +2350,9 @@ func organizeTasks(tasks []cache.TaskEntity, sortMode TaskSortMode, groupMode Ta
 		groupJ := taskGroupKey(taskGroupingAnchor(ordered[j], tasksByID, subtaskMode), groupMode)
 		if groupI != groupJ {
 			return groupI < groupJ
+		}
+		if sortDir == TaskSortDesc {
+			return taskLess(ordered[j], ordered[i], sortMode)
 		}
 		return taskLess(ordered[i], ordered[j], sortMode)
 	})

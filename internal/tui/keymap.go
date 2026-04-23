@@ -14,6 +14,7 @@ type Keymap struct {
 	SortLists    string
 	FavOnly      string
 	SortTasks    string
+	SortDirection string
 	GroupTasks   string
 	Subtasks     string
 	CollapseAll  string
@@ -35,6 +36,7 @@ func DefaultKeymap() Keymap {
 		SortLists:    "o",
 		FavOnly:      "v",
 		SortTasks:    "O",
+		SortDirection: "ctrl+o",
 		GroupTasks:   "g",
 		Subtasks:     "G",
 		CollapseAll:  "X",
