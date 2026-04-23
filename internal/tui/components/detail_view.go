@@ -58,7 +58,7 @@ func (m *DetailModel) MoveToBottom() {
 	}
 }
 
-func (m DetailModel) Render(active bool, width int, height int) string {
+func (m *DetailModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
@@ -73,18 +73,45 @@ func (m DetailModel) Render(active bool, width int, height int) string {
 	bodyLines := m.expandedLines(width)
 
 	bodySize := max(height-1, 0)
-	start := max(m.idx, 0)
-	maxStart := max(len(bodyLines)-bodySize, 0)
 
-	if start > maxStart {
-		start = maxStart
+	// Clamp vertical scroll
+	maxStart := max(len(bodyLines)-bodySize, 0)
+	if m.idx > maxStart {
+		m.idx = maxStart
+	}
+	if m.idx < 0 {
+		m.idx = 0
+	}
+	start := m.idx
+
+	// Find max line width for horizontal clamping
+	maxLineWidth := 0
+	for _, l := range bodyLines {
+		if len(l) > maxLineWidth {
+			maxLineWidth = len(l)
+		}
+	}
+	maxHorizontal := max(maxLineWidth-width, 0)
+	if m.x > maxHorizontal {
+		m.x = maxHorizontal
+	}
+	if m.x < 0 {
+		m.x = 0
 	}
 
 	end := min(start+bodySize, len(bodyLines))
 
 	for i := start; i < end; i++ {
-		// lineWindow applies horizontal scrolling offset m.x.
-		lines = append(lines, bodyLines[i])
+		line := bodyLines[i]
+		// Apply horizontal scrolling offset m.x
+		if m.x > 0 {
+			if m.x < len(line) {
+				line = line[m.x:]
+			} else {
+				line = ""
+			}
+		}
+		lines = append(lines, truncateText(line, width))
 	}
 
 	// Pad to fixed height to avoid panel jitter when content is short.

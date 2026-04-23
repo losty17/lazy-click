@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"lazy-click/internal/provider"
 )
@@ -255,6 +256,19 @@ func decodeCommentText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &plain); err == nil {
 		return plain
 	}
+
+	// Try to parse as ClickUp rich text (array of objects with "text" field)
+	var rich []struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &rich); err == nil {
+		var buf strings.Builder
+		for _, part := range rich {
+			buf.WriteString(part.Text)
+		}
+		return buf.String()
+	}
+
 	return string(raw)
 }
 

@@ -200,7 +200,7 @@ func (m *TaskTableModel) SetDisplayedTaskID(taskID string) {
 	m.displayedTaskID = taskID
 }
 
-func (m TaskTableModel) Render(active bool, width int, height int) string {
+func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
@@ -427,16 +427,18 @@ func fitCell(value string, width int) string {
 	return cell
 }
 
-func (m TaskTableModel) xForWidth(lineWidth int, viewportWidth int) int {
+func (m *TaskTableModel) xForWidth(lineWidth int, viewportWidth int) int {
 	if viewportWidth <= 0 || lineWidth <= viewportWidth {
+		m.x = 0
 		return 0
 	}
 	maxOffset := lineWidth - viewportWidth
 	if m.x < 0 {
+		m.x = 0
 		return 0
 	}
 	if m.x > maxOffset {
-		return maxOffset
+		m.x = maxOffset
 	}
 	return m.x
 }

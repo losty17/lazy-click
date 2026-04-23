@@ -1527,14 +1527,20 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 		sections = append(sections, loadingMsg, "")
 	}
 
+	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	commentsTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
+	authorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
+	descTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+
 	if task == nil {
 		sections = append(sections,
-			"Title: "+selected.Title,
-			"Status: "+selected.Status,
-			"Assignees: "+selected.Assignees,
+			labelStyle.Render("Title: ")+valueStyle.Render(selected.Title),
+			labelStyle.Render("Status: ")+valueStyle.Render(selected.Status),
+			labelStyle.Render("Assignees: ")+valueStyle.Render(selected.Assignees),
 		)
 		if m.detailError != "" && m.detailErrorTask == selected.ID {
-			sections = append(sections, "", "Last revalidate error: "+m.detailError)
+			sections = append(sections, "", labelStyle.Render("Last revalidate error: ")+valueStyle.Render(m.detailError))
 		}
 		sections = append(sections,
 			"",
@@ -1569,23 +1575,23 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 			if author == "" {
 				author = "unknown"
 			}
-			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", author, strings.TrimSpace(c.BodyMD)))
+			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", authorStyle.Render(author), strings.TrimSpace(c.BodyMD)))
 		}
 	}
 
 	sections = append(sections,
-		"Title: "+task.Title,
-		"Status: "+task.Status,
-		"Priority: "+priority,
-		"Due Date: "+dueDate,
-		"Assignees: "+assignees,
+		labelStyle.Render("Title: ")+valueStyle.Render(task.Title),
+		labelStyle.Render("Status: ")+valueStyle.Render(task.Status),
+		labelStyle.Render("Priority: ")+valueStyle.Render(priority),
+		labelStyle.Render("Due Date: ")+valueStyle.Render(dueDate),
+		labelStyle.Render("Assignees: ")+valueStyle.Render(assignees),
 	)
 	if m.detailError != "" && m.detailErrorTask == selected.ID {
-		sections = append(sections, "", "Last revalidate error: "+m.detailError)
+		sections = append(sections, "", labelStyle.Render("Last revalidate error: ")+valueStyle.Render(m.detailError))
 	}
-	sections = append(sections, "", "Description:")
+	sections = append(sections, "", descTitleStyle.Render("Description:"))
 	sections = append(sections, descriptionLines...)
-	sections = append(sections, "", "Comments:")
+	sections = append(sections, "", commentsTitleStyle.Render("Comments:"))
 	sections = append(sections, commentLines...)
 	m.detailPanel.SetSections(sections)
 }

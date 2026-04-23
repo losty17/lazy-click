@@ -81,7 +81,7 @@ func (m *SidebarModel) MoveToBottom() {
 	m.idx = len(m.items) - 1
 }
 
-func (m SidebarModel) Render(active bool, width int, height int) string {
+func (m *SidebarModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
@@ -91,6 +91,22 @@ func (m SidebarModel) Render(active bool, width int, height int) string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 	_ = active
+
+	// Clamp horizontal scroll
+	maxLineWidth := len(header)
+	for _, item := range m.items {
+		if len(item)+2 > maxLineWidth {
+			maxLineWidth = len(item) + 2
+		}
+	}
+	maxOffset := max(maxLineWidth-width, 0)
+	if m.x > maxOffset {
+		m.x = maxOffset
+	}
+	if m.x < 0 {
+		m.x = 0
+	}
+
 	lines := []string{headerStyle.Render(lineWindow(header, width, m.x))}
 
 	// Keep the selected item centered when possible and only render the visible slice.
