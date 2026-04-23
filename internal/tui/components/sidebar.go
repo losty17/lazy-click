@@ -111,7 +111,7 @@ func (m *SidebarModel) Render(active bool, width int, height int) string {
 
 	// Keep the selected item centered when possible and only render the visible slice.
 	bodySize := max(height-1, 0)
-	start, end := visibleWindow(len(m.items), m.idx, bodySize)
+	start, end := VisibleWindow(len(m.items), m.idx, bodySize)
 	for i := start; i < end; i++ {
 		item := m.items[i]
 		prefix := "  "

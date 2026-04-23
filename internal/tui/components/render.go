@@ -73,7 +73,7 @@ func lineWindow(s string, width int, offset int) string {
 	return window
 }
 
-func visibleWindow(total int, selected int, size int) (start int, end int) {
+func VisibleWindow(total int, selected int, size int) (start int, end int) {
 	if size <= 0 || total <= 0 {
 		return 0, 0
 	}

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"lazy-click/internal/cache"
+	"lazy-click/internal/tui/components"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 const maxRecentCommands = 20
@@ -20,6 +22,7 @@ type controlCommand struct {
 	Title       string
 	Subtitle    string
 	Badge       string
+	Shortcut    string
 	Aliases     []string
 	VimAdvanced bool
 }
@@ -178,26 +181,48 @@ func (m RootModel) renderControlCenter(width int) string {
 	if prefix == "" {
 		prefix = ">"
 	}
+
 	header := fmt.Sprintf("%s %s", prefix, m.controlInput)
 	lines := []string{ControlCenterTitleStyle.Render(truncateLine(header, panelWidth-2))}
+
 	if len(m.controlResults) == 0 {
 		lines = append(lines, "  No results")
 	} else {
-		for i, r := range m.controlResults {
+		// Limit results to avoid overflow
+		maxResults := 15
+		if m.height > 0 {
+			maxResults = max(m.height/2, 5)
+		}
+		start, end := components.VisibleWindow(len(m.controlResults), m.controlSelected, maxResults)
+
+		subtitleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		shortcutStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+
+		for i := start; i < end; i++ {
+			r := m.controlResults[i]
 			prefix := "  "
 			style := lipgloss.NewStyle()
 			if i == m.controlSelected {
 				prefix = "> "
 				style = ControlCenterSelectStyle
 			}
-			line := r.Title
-			if r.Badge != "" {
-				line += " [" + r.Badge + "]"
-			}
+
+			title := style.Render(r.Title)
+			subtitle := ""
 			if r.Subtitle != "" {
-				line += " - " + r.Subtitle
+				subtitle = subtitleStyle.Render(" - " + r.Subtitle)
 			}
-			lines = append(lines, style.Render(truncateLine(prefix+line, panelWidth-2)))
+			shortcut := ""
+			if r.Shortcut != "" {
+				shortcut = " " + shortcutStyle.Render("("+r.Shortcut+")")
+			}
+
+			line := prefix + title + shortcut + subtitle
+			lines = append(lines, xansi.Cut(line, 0, panelWidth-2))
+		}
+
+		if len(m.controlResults) > maxResults {
+			lines = append(lines, HelpStyle.Render(fmt.Sprintf("  ... %d more results", len(m.controlResults)-maxResults)))
 		}
 	}
 	body := strings.Join(lines, "\n")
@@ -262,7 +287,7 @@ func (m *RootModel) buildCommandResults(query string) []controlResult {
 			continue
 		}
 		rankedItems = append(rankedItems, ranked{
-			result: controlResult{Kind: "command", Title: cmd.Title, Subtitle: cmd.Subtitle, Badge: cmd.Badge, CommandID: cmd.ID},
+			result: controlResult{Kind: "command", Title: cmd.Title, Subtitle: cmd.Subtitle, Badge: cmd.Badge, Shortcut: cmd.Shortcut, CommandID: cmd.ID},
 			score:  score,
 		})
 	}
@@ -317,12 +342,12 @@ func (m *RootModel) buildTaskResults(query string) []controlResult {
 
 func (m *RootModel) buildHelpResults(query string) []controlResult {
 	items := []controlResult{
-		{Kind: "help", Title: "> Run commands", Subtitle: "Actions, toggles, settings", Badge: "mode"},
-		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode"},
-		{Kind: "help", Title: "# Search tasks", Subtitle: "Open task detail quickly", Badge: "mode"},
-		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode"},
+		{Kind: "help", Title: "> Run commands", Subtitle: "Actions, toggles, settings", Badge: "mode", Shortcut: ">"},
+		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode", Shortcut: "@"},
+		{Kind: "help", Title: "# Search tasks", Subtitle: "Open task detail quickly", Badge: "mode", Shortcut: "#"},
+		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode", Shortcut: "?"},
 		{Kind: "help", Title: "provider commands", Subtitle: "Switch provider and connect OAuth", Badge: "provider"},
-		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys"},
+		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys", Shortcut: ":"},
 		{Kind: "help", Title: "r n a v", Subtitle: "Session restore prompt choices", Badge: "restore"},
 	}
 	query = strings.ToLower(strings.TrimSpace(query))
@@ -398,6 +423,7 @@ func (m *RootModel) runControlResult(result controlResult) tea.Cmd {
 	case "task":
 		m.displayedTaskID = result.TaskID
 		m.selectedTaskID = result.TaskID
+		m.taskTable.JumpToTask(result.TaskID)
 		m.taskTable.SetDisplayedTaskID(result.TaskID)
 		m.statusLine = "Task opened: " + result.TaskTitle
 		m.persistSessionSnapshot()
@@ -540,27 +566,27 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 
 func (m *RootModel) controlCommands() []controlCommand {
 	commands := []controlCommand{
-		{ID: "quit", Title: "Quit app", Subtitle: "Exit lazy-click", Badge: "system", Aliases: []string{"quit", "exit", "q"}},
-		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}},
-		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}},
+		{ID: "quit", Title: "Quit app", Subtitle: "Exit lazy-click", Badge: "system", Aliases: []string{"quit", "exit", "q"}, Shortcut: "q"},
+		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}, Shortcut: "r"},
+		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}, Shortcut: "s"},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},
 		{ID: "connect_clickup_oauth", Title: "Connect ClickUp (OAuth)", Subtitle: "Authorize and save ClickUp token", Badge: "oauth", Aliases: []string{"clickup oauth", "connect clickup"}},
-		{ID: "toggle_me_mode", Title: "Toggle Me Mode", Subtitle: "Filter tasks by current user", Badge: "toggle", Aliases: []string{"me mode", "only me"}},
-		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}},
-		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}},
-		{ID: "cycle_task_sort", Title: "Cycle task sort", Subtitle: "Rotate current task sort mode", Badge: "toggle", Aliases: []string{"sort tasks", "task sort"}},
-		{ID: "toggle_task_sort_direction", Title: "Toggle task sort direction", Subtitle: "Switch asc/desc task sorting", Badge: "toggle", Aliases: []string{"sort direction", "task sort direction"}},
-		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}},
-		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}},
+		{ID: "toggle_me_mode", Title: "Toggle Me Mode", Subtitle: "Filter tasks by current user", Badge: "toggle", Aliases: []string{"me mode", "only me"}, Shortcut: m.keymap.MeMode},
+		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}, Shortcut: m.keymap.FavOnly},
+		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}, Shortcut: m.keymap.SortLists},
+		{ID: "cycle_task_sort", Title: "Cycle task sort", Subtitle: "Rotate current task sort mode", Badge: "toggle", Aliases: []string{"sort tasks", "task sort"}, Shortcut: m.keymap.SortTasks},
+		{ID: "toggle_task_sort_direction", Title: "Toggle task sort direction", Subtitle: "Switch asc/desc task sorting", Badge: "toggle", Aliases: []string{"sort direction", "task sort direction"}, Shortcut: m.keymap.SortDirection},
+		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}, Shortcut: m.keymap.GroupTasks},
+		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}, Shortcut: m.keymap.Subtasks},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
-		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}},
+		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}, Shortcut: m.keymap.Favorite},
 		{ID: "restore_policy_ask", Title: "Set restore policy: ask", Subtitle: "Prompt on startup", Badge: "restore", Aliases: []string{"restore ask"}},
 		{ID: "restore_policy_always", Title: "Set restore policy: always", Subtitle: "Auto-restore on startup", Badge: "restore", Aliases: []string{"restore always"}},
 		{ID: "restore_policy_never", Title: "Set restore policy: never", Subtitle: "Always start fresh", Badge: "restore", Aliases: []string{"restore never"}},
 		{ID: "restore_now", Title: "Restore last session now", Subtitle: "Apply last saved snapshot", Badge: "restore", Aliases: []string{"restore now"}},
 		{ID: "start_fresh", Title: "Start fresh now", Subtitle: "Clear saved session snapshot", Badge: "restore", Aliases: []string{"fresh", "clear session"}},
 		{ID: "toggle_vim_mode", Title: "Toggle vim mode", Subtitle: "Enable advanced vim-like controls", Badge: "config", Aliases: []string{"vim", "vim mode"}},
-		{ID: "vim_top", Title: "Vim: jump to top", Subtitle: "Move cursor to top in active pane", Badge: "vim", Aliases: []string{"gg"}, VimAdvanced: true},
+		{ID: "vim_top", Title: "Vim: jump to top", Subtitle: "Move cursor to top in active pane", Badge: "vim", Aliases: []string{"gg"}, VimAdvanced: true, Shortcut: "gg"},
 	}
 	for _, p := range m.availableProviders {
 		title := "Use provider: " + p.DisplayName

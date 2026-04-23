@@ -66,6 +66,7 @@ type controlResult struct {
 	Title     string
 	Subtitle  string
 	Badge     string
+	Shortcut  string
 	CommandID string
 	ListID    string
 	TaskID    string

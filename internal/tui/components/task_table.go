@@ -200,6 +200,15 @@ func (m *TaskTableModel) SetDisplayedTaskID(taskID string) {
 	m.displayedTaskID = taskID
 }
 
+func (m *TaskTableModel) JumpToTask(taskID string) {
+	for i, row := range m.rows {
+		if row.ID == taskID {
+			m.idx = i
+			return
+		}
+	}
+}
+
 func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
@@ -211,8 +220,8 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("223"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
 	groupStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
-	displayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("166"))
-	selectedDisplayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("33")).Bold(true)
+	displayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("166")).Bold(true)
+	selectedDisplayedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("33")).Bold(true)
 	_ = active
 
 	const (
@@ -281,17 +290,32 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	if len(m.rows) == 0 {
 		lines = append(lines, lineWindow("  No tasks available for selected list", width, 0))
 	}
-	start, end := visibleWindow(len(m.rows), m.idx, bodySize)
+	start, end := VisibleWindow(len(m.rows), m.idx, bodySize)
 	for i := start; i < end; i++ {
 		row := m.rows[i]
 		prefix := "  "
 		style := lipgloss.NewStyle()
 		isSelected := i == m.idx
 		isDisplayed := row.ID != "" && row.ID == m.displayedTaskID
+		
+		p1 := " "
+		p2 := " "
+		prefixStyle := lipgloss.NewStyle()
+		
 		if isSelected {
-			prefix = "> "
-			style = selectedStyle
+			p1 = ">"
+			prefixStyle = selectedStyle
 		}
+		if isDisplayed {
+			p2 = "*"
+			if !isSelected {
+				prefixStyle = displayedStyle
+			} else {
+				prefixStyle = selectedDisplayedStyle
+			}
+		}
+		prefix = p1 + p2
+
 		if isDisplayed {
 			if isSelected {
 				style = selectedDisplayedStyle
@@ -300,7 +324,7 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 			}
 		}
 		if lineWidth > width {
-			line := prefix + format(row)
+			line := prefixStyle.Render(prefix) + format(row)
 			if row.Type == TaskTableRowGroup {
 				style = groupStyle.Copy().Inherit(style)
 			}
@@ -343,7 +367,8 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 		}
 
 		line := strings.Join([]string{
-			style.Render(prefix + titleCell + " | "),
+			prefixStyle.Render(prefix),
+			style.Render(titleCell + " | "),
 			statusStyle.Render(statusCell),
 			style.Render(" | "),
 			priorityStyle.Render(priorityCell),
