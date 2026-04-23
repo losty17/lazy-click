@@ -7,6 +7,7 @@ import (
 )
 
 type TaskListQuery struct {
+	Provider      string
 	ListID        string
 	Statuses      []string
 	Search        string
@@ -23,6 +24,7 @@ const (
 )
 
 type ListQuery struct {
+	Provider      string
 	Search        string
 	FavoritesOnly bool
 	SortMode      ListSortMode
@@ -31,6 +33,16 @@ type ListQuery struct {
 func (r *Repository) GetSpaces() ([]SpaceEntity, error) {
 	var spaces []SpaceEntity
 	err := r.db.Order("name asc").Find(&spaces).Error
+	return spaces, err
+}
+
+func (r *Repository) GetSpacesByProvider(provider string) ([]SpaceEntity, error) {
+	var spaces []SpaceEntity
+	stmt := r.db.Model(&SpaceEntity{})
+	if provider != "" {
+		stmt = stmt.Where("provider = ?", provider)
+	}
+	err := stmt.Order("name asc").Find(&spaces).Error
 	return spaces, err
 }
 
@@ -47,6 +59,9 @@ func (r *Repository) GetAllLists() ([]ListEntity, error) {
 func (r *Repository) GetListsByQuery(q ListQuery) ([]ListEntity, error) {
 	var lists []ListEntity
 	stmt := r.db.Model(&ListEntity{})
+	if q.Provider != "" {
+		stmt = stmt.Where("provider = ?", q.Provider)
+	}
 	if q.Search != "" {
 		stmt = stmt.Where("name LIKE ?", "%"+q.Search+"%")
 	}
@@ -90,6 +105,9 @@ func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {
 
 func (r *Repository) GetTasksByQuery(q TaskListQuery) ([]TaskEntity, error) {
 	stmt := r.db.Model(&TaskEntity{})
+	if q.Provider != "" {
+		stmt = stmt.Where("provider = ?", q.Provider)
+	}
 	if q.ListID != "" {
 		stmt = stmt.Where("list_id = ?", q.ListID)
 	}
@@ -134,9 +152,13 @@ func (r *Repository) GetTaskComments(taskID string, limit int) ([]CommentEntity,
 	return comments, err
 }
 
-func (r *Repository) NextPendingSyncItem() (*SyncQueueEntity, error) {
+func (r *Repository) NextPendingSyncItem(provider string) (*SyncQueueEntity, error) {
 	var items []SyncQueueEntity
-	err := r.db.Where("state = ?", "pending").Order("created_at_unix asc").Limit(1).Find(&items).Error
+	stmt := r.db.Where("state = ?", "pending")
+	if provider != "" {
+		stmt = stmt.Where("provider = ?", provider)
+	}
+	err := stmt.Order("created_at_unix asc").Limit(1).Find(&items).Error
 	if err != nil {
 		return nil, err
 	}
@@ -146,8 +168,8 @@ func (r *Repository) NextPendingSyncItem() (*SyncQueueEntity, error) {
 	return &items[0], nil
 }
 
-func (r *Repository) ClaimNextPendingSyncItem() (*SyncQueueEntity, error) {
-	item, err := r.NextPendingSyncItem()
+func (r *Repository) ClaimNextPendingSyncItem(provider string) (*SyncQueueEntity, error) {
+	item, err := r.NextPendingSyncItem(provider)
 	if err != nil || item == nil {
 		return item, err
 	}

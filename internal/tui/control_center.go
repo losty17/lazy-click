@@ -321,6 +321,7 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode"},
 		{Kind: "help", Title: "# Search tasks", Subtitle: "Open task detail quickly", Badge: "mode"},
 		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode"},
+		{Kind: "help", Title: "provider commands", Subtitle: "Switch provider and connect OAuth", Badge: "provider"},
 		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys"},
 		{Kind: "help", Title: "r n a v", Subtitle: "Session restore prompt choices", Badge: "restore"},
 	}
@@ -506,20 +507,33 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.saveTaskPrefs()
 		m.persistSessionSnapshot()
 		return nil
+	case "provider_next":
+		return m.switchToNextProviderCmd()
+	case "connect_clickup_oauth":
+		return m.startClickUpOAuthCmd()
 	case "vim_top":
 		m.handleMoveToTop()
 		m.statusLine = "Moved to top"
 		return nil
 	default:
+		if strings.HasPrefix(id, "provider_switch:") {
+			providerID := strings.TrimPrefix(id, "provider_switch:")
+			if m.switchProvider(providerID) {
+				return m.loadDataCmd()
+			}
+			return nil
+		}
 		return nil
 	}
 }
 
 func (m *RootModel) controlCommands() []controlCommand {
-	return []controlCommand{
+	commands := []controlCommand{
 		{ID: "quit", Title: "Quit app", Subtitle: "Exit lazy-click", Badge: "system", Aliases: []string{"quit", "exit", "q"}},
 		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}},
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}},
+		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},
+		{ID: "connect_clickup_oauth", Title: "Connect ClickUp (OAuth)", Subtitle: "Authorize and save ClickUp token", Badge: "oauth", Aliases: []string{"clickup oauth", "connect clickup"}},
 		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}},
 		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}},
 		{ID: "cycle_task_sort", Title: "Cycle task sort", Subtitle: "Rotate current task sort mode", Badge: "toggle", Aliases: []string{"sort tasks", "task sort"}},
@@ -535,6 +549,22 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "toggle_vim_mode", Title: "Toggle vim mode", Subtitle: "Enable advanced vim-like controls", Badge: "config", Aliases: []string{"vim", "vim mode"}},
 		{ID: "vim_top", Title: "Vim: jump to top", Subtitle: "Move cursor to top in active pane", Badge: "vim", Aliases: []string{"gg"}, VimAdvanced: true},
 	}
+	for _, p := range m.availableProviders {
+		title := "Use provider: " + p.DisplayName
+		subtitle := "Activate provider " + p.ID
+		badge := "provider"
+		if p.ID == m.activeProviderID {
+			badge = "active"
+		}
+		commands = append(commands, controlCommand{
+			ID:       "provider_switch:" + p.ID,
+			Title:    title,
+			Subtitle: subtitle,
+			Badge:    badge,
+			Aliases:  []string{p.ID, p.DisplayName, "switch provider " + p.ID},
+		})
+	}
+	return commands
 }
 
 func (m *RootModel) recordCommand(commandID string) {

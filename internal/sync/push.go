@@ -26,7 +26,7 @@ type addCommentPayload struct {
 
 func (e *Engine) PushOnce(ctx context.Context) error {
 	e.setSyncStatus("checking pending push queue")
-	item, err := e.repo.ClaimNextPendingSyncItem()
+	item, err := e.repo.ClaimNextPendingSyncItem(e.providerKey)
 	if err != nil || item == nil {
 		e.setSyncStatus("no pending push items")
 		return err

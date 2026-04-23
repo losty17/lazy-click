@@ -220,7 +220,8 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 		sepWidth    = 3
 	)
 	sepCount := 5
-	weights := []int{34, 13, 14, 10, 10, 19}
+	// Title / Status / Priority / Due Date / Estimate / Assignees
+	weights := []int{75, 9, 1, 3, 1, 11}
 	minCols := []int{12, 7, 9, 10, 8, 10}
 	usable := max(width-prefixWidth-(sepCount*sepWidth), 1)
 	minUsable := 0
@@ -319,7 +320,7 @@ func (m TaskTableModel) Render(active bool, width int, height int) string {
 			titleValue = strings.Repeat(" ", row.Indent) + titleValue
 		}
 		titleCell := fitCell(titleValue, col[0])
-		statusCell := fitCell(strings.ToUpper(row.Status), col[1])
+		statusCell := fitCell(strings.ToUpper(formatStatus(row.Status, col[1])), col[1])
 		priorityCell := fitCell(priorityCellText(row.Priority), col[2])
 		dueDateCell := fitCell(row.DueDate, col[3])
 		estimateCell := fitCell(row.Estimate, col[4])
@@ -506,4 +507,20 @@ func contrastColor(hex string) string {
 		return "#111111"
 	}
 	return "#FFFFFF"
+}
+
+func formatStatus(status string, width int) string {
+	// center the text if possible, otherwise left align
+	s := strings.ToUpper(strings.TrimSpace(status))
+	
+	if width <= len(s) {
+		return s
+	}
+
+	padding := width - len(s)
+	
+	left := padding / 2
+	right := padding - left
+	
+	return strings.Repeat(" ", left) + s + strings.Repeat(" ", right)
 }

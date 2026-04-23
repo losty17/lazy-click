@@ -11,10 +11,11 @@ import (
 )
 
 type Engine struct {
-	repo     *cache.Repository
-	provider provider.ProjectProvider
-	logger   *log.Logger
-	interval time.Duration
+	repo        *cache.Repository
+	provider    provider.ProjectProvider
+	providerKey string
+	logger      *log.Logger
+	interval    time.Duration
 
 	mu              sync.RWMutex
 	activeListID    string
@@ -22,18 +23,40 @@ type Engine struct {
 	resetAutoSyncCh chan struct{}
 }
 
-func NewEngine(repo *cache.Repository, provider provider.ProjectProvider, logger *log.Logger, interval time.Duration) *Engine {
+func NewEngine(repo *cache.Repository, providerKey string, provider provider.ProjectProvider, logger *log.Logger, interval time.Duration) *Engine {
 	if interval <= 0 {
 		interval = 10 * time.Second
 	}
 	return &Engine{
 		repo:            repo,
 		provider:        provider,
+		providerKey:     providerKey,
 		logger:          logger,
 		interval:        interval,
 		syncStatus:      "idle",
 		resetAutoSyncCh: make(chan struct{}, 1),
 	}
+}
+
+func (e *Engine) ProviderKey() string {
+	return e.providerKey
+}
+
+func (e *Engine) SetActiveProvider(providerID string) bool {
+	return providerID == "" || providerID == e.providerKey
+}
+
+func (e *Engine) ActiveProviderID() string {
+	return e.providerKey
+}
+
+func (e *Engine) SetProviderAPI(api provider.ProjectProvider) {
+	if api == nil {
+		return
+	}
+	e.mu.Lock()
+	e.provider = api
+	e.mu.Unlock()
 }
 
 func (e *Engine) Run(ctx context.Context) error {

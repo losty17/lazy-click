@@ -17,8 +17,12 @@ func (e *Engine) QueueTaskUpdate(taskID string, update provider.TaskUpdate) erro
 	}
 
 	now := time.Now().UnixMilli()
+	providerID := e.providerKey
+	if providerID == "" {
+		providerID = "clickup"
+	}
 	return e.repo.EnqueueSync(cache.SyncQueueEntity{
-		Provider:      "clickup",
+		Provider:      providerID,
 		EntityType:    "task",
 		EntityID:      taskID,
 		Operation:     opUpdateTask,
@@ -39,8 +43,12 @@ func (e *Engine) QueueAddComment(taskID string, text string) error {
 	}
 
 	now := time.Now().UnixMilli()
+	providerID := e.providerKey
+	if providerID == "" {
+		providerID = "clickup"
+	}
 	return e.repo.EnqueueSync(cache.SyncQueueEntity{
-		Provider:      "clickup",
+		Provider:      providerID,
 		EntityType:    "comment",
 		EntityID:      taskID,
 		Operation:     opAddComment,

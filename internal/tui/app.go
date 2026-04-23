@@ -11,6 +11,7 @@ import (
 
 	"lazy-click/internal/cache"
 	"lazy-click/internal/provider"
+	"lazy-click/internal/provider/clickup"
 	syncengine "lazy-click/internal/sync"
 	"lazy-click/internal/tui/components"
 
@@ -34,6 +35,8 @@ const (
 	appStateRestoreSession   = "ui.restore.last_session"
 	appStateRecentCommands   = "ui.control_center.recent_commands"
 	appStateCommandUsage     = "ui.control_center.command_usage"
+	appStateActiveProviderID = "ui.active_provider_id"
+	appStateClickUpToken     = "provider.clickup.oauth_token"
 
 	detailDebounceDelay = 3 * time.Second
 )
@@ -117,27 +120,39 @@ type SyncQueuer interface {
 	Cycle(ctx context.Context) error
 	SyncList(ctx context.Context, listID string) error
 	SetActiveListID(listID string)
+	SetActiveProvider(providerID string) bool
+	ActiveProviderID() string
+	Providers() []syncengine.ProviderMeta
+	ProviderDisplayName() string
+	SetProviderToken(providerID string, token string) bool
 	RevalidateTask(ctx context.Context, taskID string) error
 	SyncStatus() string
 }
 
 type RootModel struct {
-	width         int
-	height        int
-	keymap        Keymap
-	activePane    int
-	repo          *cache.Repository
-	sync          SyncQueuer
-	provider      string
-	statusLine    string
-	lists         []cache.ListEntity
-	sidebar       components.SidebarModel
-	taskTable     components.TaskTableModel
-	detailPanel   components.DetailModel
-	statuses      []string
-	taskSortMode  TaskSortMode
-	taskGroupMode TaskGroupMode
-	taskSubtasks  TaskSubtaskMode
+	width               int
+	height              int
+	keymap              Keymap
+	activePane          int
+	repo                *cache.Repository
+	sync                SyncQueuer
+	provider            string
+	activeProviderID    string
+	availableProviders  []syncengine.ProviderMeta
+	clickUpClientID     string
+	oauthBackendURL     string
+	clickUpConnected    bool
+	providerSetupPrompt bool
+	providerSetupIndex  int
+	statusLine          string
+	lists               []cache.ListEntity
+	sidebar             components.SidebarModel
+	taskTable           components.TaskTableModel
+	detailPanel         components.DetailModel
+	statuses            []string
+	taskSortMode        TaskSortMode
+	taskGroupMode       TaskGroupMode
+	taskSubtasks        TaskSubtaskMode
 
 	statusFilter string
 	searchMode   bool
@@ -186,31 +201,37 @@ type RootModel struct {
 }
 
 type dataLoadedMsg struct {
-	lists              []cache.ListEntity
-	tasks              []cache.TaskEntity
-	statuses           []string
-	err                error
-	selectedListID     string
-	restored           bool
-	restoredListSearch string
-	restoredSortMode   cache.ListSortMode
-	restoredFavOnly    bool
-	restoredTaskSort   TaskSortMode
-	restoredTaskGroup  TaskGroupMode
-	restoredSubtasks   TaskSubtaskMode
-	restoredStatus     string
-	restoredTaskSearch string
-	restoredVimMode    bool
-	restorePolicy      RestorePolicy
-	hasRestoreSnapshot bool
-	restoreSnapshot    uiSessionSnapshot
-	recentCommands     []string
-	commandUsage       map[string]commandUsageStat
+	lists                  []cache.ListEntity
+	tasks                  []cache.TaskEntity
+	statuses               []string
+	err                    error
+	selectedListID         string
+	restored               bool
+	restoredListSearch     string
+	restoredSortMode       cache.ListSortMode
+	restoredFavOnly        bool
+	restoredTaskSort       TaskSortMode
+	restoredTaskGroup      TaskGroupMode
+	restoredSubtasks       TaskSubtaskMode
+	restoredStatus         string
+	restoredTaskSearch     string
+	restoredVimMode        bool
+	restoredActiveProvider string
+	restorePolicy          RestorePolicy
+	hasRestoreSnapshot     bool
+	restoreSnapshot        uiSessionSnapshot
+	recentCommands         []string
+	commandUsage           map[string]commandUsageStat
 }
 
 type editResultMsg struct{ err error }
 type syncResultMsg struct{ err error }
 type commentResultMsg struct{ err error }
+type oauthResultMsg struct {
+	providerID string
+	token      string
+	err        error
+}
 type pollTickMsg struct{}
 type syncTickMsg struct{}
 
@@ -230,31 +251,45 @@ type manualTaskRefreshResultMsg struct {
 	Err    error
 }
 
-func NewRootModel(repo *cache.Repository, sync *syncengine.Engine, providerName string, statusLine string) RootModel {
+func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, statusLine string, clickUpClientID string, oauthBackendURL string, clickUpConnected bool, needsProviderSetup bool) RootModel {
 	if providerName == "" {
 		providerName = "none"
 	}
 	var syncer SyncQueuer
 	if sync != nil {
 		syncer = sync
+		providerName = sync.ProviderDisplayName()
+	}
+	activeProviderID := ""
+	availableProviders := []syncengine.ProviderMeta{}
+	if syncer != nil {
+		activeProviderID = syncer.ActiveProviderID()
+		availableProviders = syncer.Providers()
 	}
 	return RootModel{
-		repo:          repo,
-		sync:          syncer,
-		provider:      providerName,
-		keymap:        DefaultKeymap(),
-		statusLine:    statusLine,
-		sidebar:       components.NewSidebar(),
-		taskTable:     components.NewTaskTable(),
-		detailPanel:   components.NewDetail(),
-		listSortMode:  cache.ListSortNameAsc,
-		taskSortMode:  TaskSortPriority,
-		taskGroupMode: TaskGroupNone,
-		taskSubtasks:  TaskSubtaskFlat,
-		favoritesOnly: false,
-		restorePolicy: RestorePolicyAsk,
-		controlMode:   ControlModeCommand,
-		commandUsage:  make(map[string]commandUsageStat),
+		repo:                repo,
+		sync:                syncer,
+		provider:            providerName,
+		activeProviderID:    activeProviderID,
+		availableProviders:  availableProviders,
+		clickUpClientID:     clickUpClientID,
+		oauthBackendURL:     oauthBackendURL,
+		clickUpConnected:    clickUpConnected,
+		providerSetupPrompt: needsProviderSetup,
+		providerSetupIndex:  0,
+		keymap:              DefaultKeymap(),
+		statusLine:          statusLine,
+		sidebar:             components.NewSidebar(),
+		taskTable:           components.NewTaskTable(),
+		detailPanel:         components.NewDetail(),
+		listSortMode:        cache.ListSortNameAsc,
+		taskSortMode:        TaskSortPriority,
+		taskGroupMode:       TaskGroupNone,
+		taskSubtasks:        TaskSubtaskFlat,
+		favoritesOnly:       false,
+		restorePolicy:       RestorePolicyAsk,
+		controlMode:         ControlModeCommand,
+		commandUsage:        make(map[string]commandUsageStat),
 	}
 }
 
@@ -269,6 +304,51 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 
 	case tea.KeyMsg:
+		if m.providerSetupPrompt {
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.providerSetupIndex > 0 {
+					m.providerSetupIndex--
+				}
+				return m, nil
+			case tea.KeyDown:
+				if m.providerSetupIndex+1 < len(m.availableProviders) {
+					m.providerSetupIndex++
+				}
+				return m, nil
+			case tea.KeyEnter:
+				if len(m.availableProviders) == 0 {
+					return m, nil
+				}
+				selected := m.availableProviders[m.providerSetupIndex]
+				m.providerSetupPrompt = false
+				if m.switchProvider(selected.ID) {
+					m.statusLine = "Default provider set to " + m.provider
+					if m.providerNeedsConnectionOverlay() {
+						return m, nil
+					}
+					return m, m.loadDataCmd()
+				}
+				m.providerSetupPrompt = true
+				return m, nil
+			}
+			return m, nil
+		}
+
+		if m.providerNeedsConnectionOverlay() {
+			switch msg.Type {
+			case tea.KeyEnter:
+				m.statusLine = "Starting ClickUp OAuth..."
+				return m, m.startClickUpOAuthCmd()
+			}
+			switch msg.String() {
+			case "q", "ctrl+c":
+				m.persistSessionSnapshot()
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
 		if m.restorePrompt {
 			switch msg.Type {
 			case tea.KeyUp:
@@ -571,6 +651,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusFilter = msg.restoredStatus
 			m.searchQuery = msg.restoredTaskSearch
 			m.vimMode = msg.restoredVimMode
+			if msg.restoredActiveProvider != "" && m.sync != nil {
+				if m.sync.SetActiveProvider(msg.restoredActiveProvider) {
+					m.activeProviderID = msg.restoredActiveProvider
+					m.provider = m.sync.ProviderDisplayName()
+				}
+			}
 			if msg.restorePolicy != "" {
 				m.restorePolicy = msg.restorePolicy
 			}
@@ -596,6 +682,9 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.sync != nil {
 			m.sync.SetActiveListID(m.selectedListID)
+			m.availableProviders = m.sync.Providers()
+			m.activeProviderID = m.sync.ActiveProviderID()
+			m.provider = m.sync.ProviderDisplayName()
 		}
 
 		sidebarItems := make([]string, 0, len(msg.lists))
@@ -692,7 +781,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusLine = "Edit failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.statusLine = "Task title updated locally and queued for ClickUp push"
+		m.statusLine = "Task title updated locally and queued for provider push"
 		return m, m.loadDataCmd()
 
 	case syncResultMsg:
@@ -717,7 +806,28 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusLine = "Comment failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.statusLine = "Comment saved locally and queued for ClickUp push"
+		m.statusLine = "Comment saved locally and queued for provider push"
+		return m, m.loadDataCmd()
+
+	case oauthResultMsg:
+		if msg.err != nil {
+			m.statusLine = "OAuth failed: " + msg.err.Error()
+			return m, nil
+		}
+		if m.repo != nil {
+			_ = m.repo.SaveAppState(appStateClickUpToken, msg.token)
+		}
+		if m.sync != nil {
+			if !m.sync.SetProviderToken(msg.providerID, msg.token) {
+				m.statusLine = "OAuth completed but provider token update failed"
+				return m, nil
+			}
+			m.availableProviders = m.sync.Providers()
+		}
+		if msg.providerID == "clickup" {
+			m.clickUpConnected = true
+		}
+		m.statusLine = "ClickUp connected successfully"
 		return m, m.loadDataCmd()
 
 	case pollTickMsg:
@@ -830,8 +940,9 @@ func (m RootModel) View() string {
 		taskSearch = m.searchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Task status: %s | Task search: %s | Vim mode: %t",
+		"Provider: %s (%s) | List sort: %s | Task sort: %s | Task group: %s | Subtasks: %s | Favorites-only: %t | Task status: %s | Task search: %s | Vim mode: %t",
 		m.provider,
+		m.activeProviderID,
 		m.listSortMode,
 		m.taskSortMode,
 		m.taskGroupMode,
@@ -848,7 +959,7 @@ func (m RootModel) View() string {
 	} else if m.searchMode {
 		help = fmt.Sprintf("Task search mode: %s (type to filter, Enter apply, Esc cancel)", m.searchInput)
 	} else if m.controlOpen {
-		help = "Control center: Enter run/select, Esc close, @ lists, # tasks, ? help, > commands"
+		help = "Control center: Enter run/select, Esc close, @ lists, # tasks, ? help, > commands, provider switch commands"
 	} else if m.restorePrompt {
 		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
@@ -874,6 +985,16 @@ func (m RootModel) View() string {
 	if m.controlOpen {
 		overlay := m.renderControlCenter(totalWidth)
 		y := centeredOverlayY(screen, overlay, 0)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.providerSetupPrompt {
+		overlay := m.renderProviderSetupOverlay(totalWidth)
+		y := centeredOverlayY(screen, overlay, -1)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.providerNeedsConnectionOverlay() {
+		overlay := m.renderProviderConnectOverlay(totalWidth)
+		y := centeredOverlayY(screen, overlay, -1)
 		screen = overlayCentered(screen, overlay, totalWidth, y)
 	}
 
@@ -1057,6 +1178,13 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				_ = json.Unmarshal([]byte(usageRaw), &usage)
 			}
 
+			activeProvider := ""
+			if providerRaw, err := m.repo.GetAppState(appStateActiveProviderID); err != nil {
+				return dataLoadedMsg{err: err}
+			} else {
+				activeProvider = strings.TrimSpace(providerRaw)
+			}
+
 			currentSort = sortMode
 			currentFavOnly = favOnly
 			msg.restored = true
@@ -1074,9 +1202,19 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoreSnapshot = snapshot
 			msg.recentCommands = recentCommands
 			msg.commandUsage = usage
+			msg.restoredActiveProvider = activeProvider
+		}
+
+		activeProviderID := m.activeProviderID
+		if msg.restoredActiveProvider != "" {
+			activeProviderID = msg.restoredActiveProvider
+		}
+		if m.sync != nil && activeProviderID != "" {
+			_ = m.sync.SetActiveProvider(activeProviderID)
 		}
 
 		lists, err := m.repo.GetListsByQuery(cache.ListQuery{
+			Provider:      activeProviderID,
 			Search:        currentSearch,
 			FavoritesOnly: currentFavOnly,
 			SortMode:      currentSort,
@@ -1098,6 +1236,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 		}
 
 		tasks, err := m.repo.GetTasksByQuery(cache.TaskListQuery{
+			Provider:      activeProviderID,
 			ListID:        selectedListID,
 			Statuses:      selectedStatusFilter(statusFilter),
 			IncludeClosed: true,
@@ -1119,6 +1258,67 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 		msg.selectedListID = selectedListID
 		return msg
 	}
+}
+
+func (m RootModel) activeProviderMeta() (syncengine.ProviderMeta, bool) {
+	for _, p := range m.availableProviders {
+		if p.ID == m.activeProviderID {
+			return p, true
+		}
+	}
+	return syncengine.ProviderMeta{}, false
+}
+
+func (m RootModel) providerNeedsConnectionOverlay() bool {
+	meta, ok := m.activeProviderMeta()
+	if !ok {
+		return false
+	}
+	if meta.Kind != "clickup" {
+		return false
+	}
+	return !m.clickUpConnected
+}
+
+func (m RootModel) renderProviderSetupOverlay(width int) string {
+	panelWidth := min(max(width-6, 46), 96)
+	lines := []string{
+		ControlCenterTitleStyle.Render(truncateLine("Choose your default provider", panelWidth-2)),
+		"",
+	}
+	if len(m.availableProviders) == 0 {
+		lines = append(lines, "  No providers available")
+	} else {
+		for i, p := range m.availableProviders {
+			prefix := "  "
+			style := lipgloss.NewStyle()
+			if i == m.providerSetupIndex {
+				prefix = "> "
+				style = ControlCenterSelectStyle
+			}
+			label := p.DisplayName
+			if strings.TrimSpace(label) == "" {
+				label = p.ID
+			}
+			line := fmt.Sprintf("%s [%s]", label, p.Kind)
+			lines = append(lines, style.Render(truncateLine(prefix+line, panelWidth-2)))
+		}
+	}
+	lines = append(lines, "", HelpStyle.Render("Use arrows and press Enter to continue"))
+	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (m RootModel) renderProviderConnectOverlay(width int) string {
+	panelWidth := min(max(width-6, 52), 104)
+	lines := []string{
+		ControlCenterTitleStyle.Render(truncateLine("Provider requires connection", panelWidth-2)),
+		"",
+		truncateLine("The active provider is not connected yet.", panelWidth-2),
+		truncateLine("Press Enter to connect with OAuth.", panelWidth-2),
+		"",
+		ControlCenterSelectStyle.Render(truncateLine("> Connect ClickUp OAuth (Enter)", panelWidth-2)),
+	}
+	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m RootModel) selectedListIDFromSidebar() string {
@@ -1544,6 +1744,76 @@ func (m RootModel) saveListPrefs() {
 	_ = m.repo.SaveAppState(appStateFavoritesOnly, strconv.FormatBool(m.favoritesOnly))
 }
 
+func (m *RootModel) switchProvider(providerID string) bool {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" || m.sync == nil {
+		return false
+	}
+	if !m.sync.SetActiveProvider(providerID) {
+		m.statusLine = "Provider switch failed: " + providerID
+		return false
+	}
+	m.activeProviderID = m.sync.ActiveProviderID()
+	m.provider = m.sync.ProviderDisplayName()
+	m.availableProviders = m.sync.Providers()
+	m.selectedListID = ""
+	m.displayedTaskID = ""
+	m.selectedTaskID = ""
+	m.taskTable.SetDisplayedTaskID("")
+	m.detailLoading = false
+	m.detailLoadingMsg = ""
+	if m.repo != nil {
+		_ = m.repo.SaveAppState(appStateActiveProviderID, m.activeProviderID)
+	}
+	m.statusLine = "Provider switched to " + m.provider
+	m.persistSessionSnapshot()
+	return true
+}
+
+func (m *RootModel) switchToNextProviderCmd() tea.Cmd {
+	if len(m.availableProviders) == 0 {
+		m.statusLine = "No providers configured"
+		return nil
+	}
+	idx := -1
+	for i, p := range m.availableProviders {
+		if p.ID == m.activeProviderID {
+			idx = i
+			break
+		}
+	}
+	next := 0
+	if idx >= 0 {
+		next = (idx + 1) % len(m.availableProviders)
+	}
+	if m.switchProvider(m.availableProviders[next].ID) {
+		return m.loadDataCmd()
+	}
+	return nil
+}
+
+func (m RootModel) startClickUpOAuthCmd() tea.Cmd {
+	if strings.TrimSpace(m.clickUpClientID) == "" {
+		return func() tea.Msg {
+			return oauthResultMsg{providerID: "clickup", err: fmt.Errorf("CLICKUP_CLIENT_ID is required")}
+		}
+	}
+	if strings.TrimSpace(m.oauthBackendURL) == "" {
+		return func() tea.Msg {
+			return oauthResultMsg{providerID: "clickup", err: fmt.Errorf("LAZY_CLICK_OAUTH_BACKEND_URL is required")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		token, err := clickup.OAuthTokenViaBackend(ctx, clickup.BackendOAuthConfig{
+			BackendURL: m.oauthBackendURL,
+			ClientID:   m.clickUpClientID,
+		})
+		return oauthResultMsg{providerID: "clickup", token: token, err: err}
+	}
+}
+
 func totalHeightFromModel(height int) int {
 	if height > 0 {
 		return height
@@ -1893,7 +2163,7 @@ func taskGroupLabel(task cache.TaskEntity, mode TaskGroupMode) string {
 		if label == "" {
 			return "Status: (none)"
 		}
-		return "Status: " + label
+		return "Status: " + strings.ToUpper(label)
 	case TaskGroupAssignee:
 		assignee := strings.TrimSpace(primaryAssignee(task.AssigneesJSON))
 		if assignee == "" {

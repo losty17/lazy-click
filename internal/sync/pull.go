@@ -31,7 +31,7 @@ func (e *Engine) PullMetadataOnce(ctx context.Context) error {
 	for _, s := range spaces {
 		spaceRows = append(spaceRows, cache.SpaceEntity{
 			ID:         s.ID,
-			Provider:   "clickup",
+			Provider:   e.providerKey,
 			ExternalID: s.ID,
 			Name:       s.Name,
 		})
@@ -58,7 +58,7 @@ func (e *Engine) PullMetadataOnce(ctx context.Context) error {
 		for _, l := range lists {
 			listRows = append(listRows, cache.ListEntity{
 				ID:         l.ID,
-				Provider:   "clickup",
+				Provider:   e.providerKey,
 				ExternalID: l.ID,
 				SpaceID:    s.ID,
 				Name:       l.Name,
