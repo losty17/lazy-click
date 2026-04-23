@@ -15,8 +15,8 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X lazy-click/internal/config.buildDefaultClickUpClientID={{ .Env.BUILD_DEFAULT_CLICKUP_CLIENT_ID }}
-        -X lazy-click/internal/config.buildDefaultOAuthBackendURL={{ .Env.BUILD_DEFAULT_OAUTH_BACKEND_URL }}
+        -X lazy-click/internal/config.buildDefaultClickUpClientID={{ index .Env "BUILD_DEFAULT_CLICKUP_CLIENT_ID" | default "" }}
+        -X lazy-click/internal/config.buildDefaultOAuthBackendURL={{ index .Env "BUILD_DEFAULT_OAUTH_BACKEND_URL" | default "" }}
     goos:
       - linux
       - darwin
