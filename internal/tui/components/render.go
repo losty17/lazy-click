@@ -1,7 +1,63 @@
 package components
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+	"unicode/utf8"
+)
 
+var ansiRegex = regexp.MustCompile(`\x1b_G.*?\x1b\\|\x1b\[[0-9;]*[a-zA-Z]|\x1b\][0-9];.*?\x07`)
+
+func DisplayWidth(s string) int {
+	// Strip ANSI and APC sequences to get visual width.
+	// This is a simplified approach; it doesn't handle double-width runes, 
+	// but it's enough for our current needs with ASCII/UTF-8 labels.
+	clean := ansiRegex.ReplaceAllString(s, "")
+	return utf8.RuneCountInString(clean)
+}
+
+func Truncate(s string, width int, tail string) string {
+	if DisplayWidth(s) <= width {
+		return s
+	}
+
+	tailWidth := DisplayWidth(tail)
+	if width <= tailWidth {
+		// If width is too small even for the tail, just return empty or slice.
+		return s // fallback
+	}
+
+	// We need to truncate 's' such that DisplayWidth(s) + tailWidth <= width.
+	// We iterate through runes and keep track of visible width.
+	target := width - tailWidth
+	var result strings.Builder
+	currentWidth := 0
+	
+	i := 0
+	for i < len(s) {
+		// Check if we are at the start of an ANSI sequence
+		if loc := ansiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+			seq := s[i : i+loc[1]]
+			result.WriteString(seq)
+			i += loc[1]
+			continue
+		}
+
+		// Otherwise, take one rune
+		r, size := utf8.DecodeRuneInString(s[i:])
+		// Simplified width: 1 for everything. 
+		// Real implementation would check r's width.
+		if currentWidth+1 > target {
+			break
+		}
+		result.WriteRune(r)
+		currentWidth++
+		i += size
+	}
+
+	result.WriteString(tail)
+	return result.String()
+}
 
 func RenderMarkdownLines(markdown string) []string {
 	if strings.TrimSpace(markdown) == "" {

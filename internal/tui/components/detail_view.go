@@ -67,7 +67,7 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 	title := "Detail"
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	_ = active
-	lines := []string{titleStyle.Render(truncateText(title, width))}
+	lines := []string{titleStyle.Render(Truncate(title, width, "..."))}
 
 	// Expand logical sections into one flat list of renderable lines.
 	bodyLines := m.expandedLines(width)
@@ -87,11 +87,9 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 	// Find max line width for horizontal clamping
 	maxLineWidth := 0
 	for _, l := range bodyLines {
-		if strings.Contains(l, "\x1b") {
-			continue // Skip escape sequences for width calculation
-		}
-		if len(l) > maxLineWidth {
-			maxLineWidth = len(l)
+		dw := DisplayWidth(l)
+		if dw > maxLineWidth {
+			maxLineWidth = dw
 		}
 	}
 	maxHorizontal := max(maxLineWidth-width, 0)
@@ -119,12 +117,18 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 				line = ""
 			}
 		}
-		lines = append(lines, truncateText(line, width))
+		
+		padded := Truncate(line, width, "...")
+		dw := DisplayWidth(padded)
+		if dw < width {
+			padded += strings.Repeat(" ", width-dw)
+		}
+		lines = append(lines, padded)
 	}
 
 	// Pad to fixed height to avoid panel jitter when content is short.
 	for len(lines) < height {
-		lines = append(lines, "")
+		lines = append(lines, strings.Repeat(" ", width))
 	}
 
 	return strings.Join(lines, "\n")

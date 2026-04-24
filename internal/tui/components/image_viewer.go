@@ -23,11 +23,45 @@ func IsKittyTerminal() bool {
 	return false
 }
 
-func RenderKittyImage(path string, maxWidth, maxHeight int) string {
-	if path == "" {
-		return ""
+func GetImageDimensions(path string) (width, height int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, err
 	}
+	defer f.Close()
+	img, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0, err
+	}
+	return img.Width, img.Height, nil
+}
 
+func CalculateRenderSize(imgWidth, imgHeight, maxWidth int) (cols, rows int) {
+	rows = 10
+	cols = int(float64(imgWidth) / float64(imgHeight) * float64(rows) * 2.0)
+	if maxWidth > 0 && cols > maxWidth {
+		cols = maxWidth
+		rows = int(float64(imgHeight) / float64(imgWidth) * float64(cols) / 2.0)
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return cols, rows
+}
+
+func RenderKittyPlacement(id uint32, cols, rows int) string {
+	// a=p: Place an image that has already been transmitted
+	// i: Image ID
+	// c, r: Columns and rows
+	// z=1: High z-index to stay on top
+	// q=2: Quiet mode
+	sequence := fmt.Sprintf("\x1b_Ga=p,i=%d,c=%d,r=%d,z=1,q=2\x1b\\", id, cols, rows)
+	return sequence + strings.Repeat("\n", rows-1)
+}
+
+func RenderKittyImage(path string, maxWidth, maxHeight int) string {
+	// Keep the direct version as a fallback or for simple cases, 
+	// but the app will now prefer the ID-based approach.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Sprintf("[Error reading image: %v]", err)
@@ -36,26 +70,11 @@ func RenderKittyImage(path string, maxWidth, maxHeight int) string {
 	rawSize := len(data)
 	encoded := base64.StdEncoding.EncodeToString(data)
 
-	// Determine dimensions for reservation
-	rows := 10
-	cols := 40 // default fallback
-	
-	f, err := os.Open(path)
-	if err == nil {
-		img, _, err := image.DecodeConfig(f)
-		f.Close()
-		if err == nil {
-			// Calculate aspect ratio. Standard cell is ~1:2 (width:height).
-			cols = int(float64(img.Width) / float64(img.Height) * float64(rows) * 2.0)
-			if maxWidth > 0 && cols > maxWidth {
-				cols = maxWidth
-				rows = int(float64(img.Height) / float64(img.Width) * float64(cols) / 2.0)
-			}
-		}
+	w, h, err := GetImageDimensions(path)
+	if err != nil {
+		return fmt.Sprintf("[Error decoding image: %v]", err)
 	}
-	if rows < 1 {
-		rows = 1
-	}
+	cols, rows := CalculateRenderSize(w, h, maxWidth)
 
 	var sb strings.Builder
 	const chunkSize = 4096
@@ -71,18 +90,11 @@ func RenderKittyImage(path string, maxWidth, maxHeight int) string {
 		payload := encoded[i:end]
 
 		if i == 0 {
-			// a=T: Transmit and display
-			// t=d: Direct data transmission
-			// f=100: Auto-detect format
-			// S: Raw size before base64
-			// c: Columns, r: Rows
-			// m: More chunks follow
-			fmt.Fprintf(&sb, "\x1b_Ga=T,t=d,f=100,S=%d,c=%d,r=%d,m=%d;%s\x1b\\", rawSize, cols, rows, m, payload)
+			fmt.Fprintf(&sb, "\x1b_Ga=T,t=d,f=100,q=2,S=%d,c=%d,r=%d,m=%d;%s\x1b\\", rawSize, cols, rows, m, payload)
 		} else {
 			fmt.Fprintf(&sb, "\x1b_Gm=%d;%s\x1b\\", m, payload)
 		}
 	}
 
-	// Reservation: return sequence + newlines to "push" the text down
 	return sb.String() + strings.Repeat("\n", rows-1)
 }

@@ -189,7 +189,7 @@ func (m RootModel) renderControlCenter(width int) string {
 	}
 
 	header := fmt.Sprintf("%s %s", prefix, m.controlInput)
-	lines := []string{ControlCenterTitleStyle.Render(truncateLine(header, panelWidth-2))}
+	lines := []string{ControlCenterTitleStyle.Render(components.Truncate(header, panelWidth-2, "..."))}
 
 	if len(m.controlResults) == 0 {
 		lines = append(lines, "  No results")
@@ -237,7 +237,7 @@ func (m RootModel) renderControlCenter(width int) string {
 
 func (m RootModel) renderRestorePrompt(width int) string {
 	panelWidth := min(max(width-4, 44), 100)
-	lines := []string{ControlCenterTitleStyle.Render(truncateLine("Restore previous session?", panelWidth-2)), ""}
+	lines := []string{ControlCenterTitleStyle.Render(components.Truncate("Restore previous session?", panelWidth-2, "...")), ""}
 	for i, option := range restorePromptOptions() {
 		prefix := "  "
 		style := lipgloss.NewStyle()
@@ -246,7 +246,7 @@ func (m RootModel) renderRestorePrompt(width int) string {
 			style = ControlCenterSelectStyle
 		}
 		line := fmt.Sprintf("%s [%s]", option.Label, option.Shortcut)
-		lines = append(lines, style.Render(truncateLine(prefix+line, panelWidth-2)))
+		lines = append(lines, style.Render(components.Truncate(prefix+line, panelWidth-2, "...")))
 	}
 	lines = append(lines, "", HelpStyle.Render("Use arrows + Enter"))
 	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
@@ -591,14 +591,20 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.saveTaskPrefs()
 		m.persistSessionSnapshot()
 		return nil
+	case "toggle_kitty_graphics":
+		m.kittyGraphicsEnabled = !m.kittyGraphicsEnabled
+		m.statusLine = fmt.Sprintf("Kitty Graphics: %t", m.kittyGraphicsEnabled)
+		m.saveTaskPrefs()
+		m.persistSessionSnapshot()
+		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	case "provider_next":
 		return m.switchToNextProviderCmd()
 	case "connect_clickup_oauth":
 		return m.startClickUpOAuthCmd()
 	case "vim_top":
-		m.handleMoveToTop()
+		cmd := m.handleMoveToTop()
 		m.statusLine = "Moved to top"
-		return nil
+		return cmd
 	default:
 		if strings.HasPrefix(id, "provider_switch:") {
 			providerID := strings.TrimPrefix(id, "provider_switch:")
@@ -634,6 +640,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "restore_now", Title: "Restore last session now", Subtitle: "Apply last saved snapshot", Badge: "restore", Aliases: []string{"restore now"}},
 		{ID: "start_fresh", Title: "Start fresh now", Subtitle: "Clear saved session snapshot", Badge: "restore", Aliases: []string{"fresh", "clear session"}},
 		{ID: "toggle_vim_mode", Title: "Toggle vim mode", Subtitle: "Enable advanced vim-like controls", Badge: "config", Aliases: []string{"vim", "vim mode"}},
+		{ID: "toggle_kitty_graphics", Title: "Toggle Kitty Graphics", Subtitle: "Enable/disable terminal image display (Kitty only)", Badge: "experimental", Aliases: []string{"kitty", "images", "graphics"}},
 		{ID: "vim_top", Title: "Vim: jump to top", Subtitle: "Move cursor to top in active pane", Badge: "vim", Aliases: []string{"gg"}, VimAdvanced: true, Shortcut: "gg"},
 	}
 	for _, p := range m.availableProviders {
@@ -697,6 +704,7 @@ func (m *RootModel) saveTaskPrefs() {
 	_ = m.repo.SaveAppState(appStateTaskSearchQuery, m.searchQuery)
 	_ = m.repo.SaveAppState(appStateMeMode, fmt.Sprintf("%t", m.meMode))
 	_ = m.repo.SaveAppState(appStateVimModeEnabled, fmt.Sprintf("%t", m.vimMode))
+	_ = m.repo.SaveAppState(appStateKittyGraphicsEnabled, fmt.Sprintf("%t", m.kittyGraphicsEnabled))
 	_ = m.repo.SaveAppState(appStateRestorePolicy, string(m.restorePolicy))
 }
 
