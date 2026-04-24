@@ -87,6 +87,9 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 	// Find max line width for horizontal clamping
 	maxLineWidth := 0
 	for _, l := range bodyLines {
+		if strings.Contains(l, "\x1b") {
+			continue // Skip escape sequences for width calculation
+		}
 		if len(l) > maxLineWidth {
 			maxLineWidth = len(l)
 		}
@@ -103,6 +106,11 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 
 	for i := start; i < end; i++ {
 		line := bodyLines[i]
+		if strings.Contains(line, "\x1b") {
+			// Don't truncate or scroll lines with escape sequences (Kitty images)
+			lines = append(lines, line)
+			continue
+		}
 		// Apply horizontal scrolling offset m.x
 		if m.x > 0 {
 			if m.x < len(line) {
@@ -141,6 +149,10 @@ func (m DetailModel) expandedLines(width int) []string {
 		}
 
 		for _, part := range parts {
+			if strings.Contains(part, "\x1b") {
+				lines = append(lines, part)
+				continue
+			}
 			formattedLines := breakLines(part, width)
 			lines = append(lines, formattedLines...)
 		}

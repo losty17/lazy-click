@@ -132,5 +132,10 @@ func mapTaskToEntity(task provider.Task, listID string) cache.TaskEntity {
 			row.AssigneesJSON = string(b)
 		}
 	}
+	if len(task.Attachments) > 0 {
+		if b, err := json.Marshal(task.Attachments); err == nil {
+			row.AttachmentsJSON = string(b)
+		}
+	}
 	return row
 }

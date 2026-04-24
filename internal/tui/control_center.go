@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"lazy-click/internal/cache"
+	"lazy-click/internal/provider"
 	"lazy-click/internal/tui/components"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -149,6 +150,9 @@ func (m *RootModel) syncControlModeByPrefix() {
 	case string(ControlModeHelp):
 		m.controlMode = ControlModeHelp
 		m.controlInput = strings.TrimSpace(trimmed[1:])
+	case string(ControlModeAttachment):
+		m.controlMode = ControlModeAttachment
+		m.controlInput = strings.TrimSpace(trimmed[1:])
 	}
 }
 
@@ -160,6 +164,8 @@ func (m *RootModel) refreshControlResults() {
 		m.controlResults = m.buildTaskResults(m.controlInput)
 	case ControlModeHelp:
 		m.controlResults = m.buildHelpResults(m.controlInput)
+	case ControlModeAttachment:
+		m.controlResults = m.buildAttachmentResults(m.controlInput)
 	default:
 		m.controlResults = m.buildCommandResults(m.controlInput)
 	}
@@ -345,6 +351,7 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "> Run commands", Subtitle: "Actions, toggles, settings", Badge: "mode", Shortcut: ">"},
 		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode", Shortcut: "@"},
 		{Kind: "help", Title: "# Search tasks", Subtitle: "Open task detail quickly", Badge: "mode", Shortcut: "#"},
+		{Kind: "help", Title: "! Search attachments", Subtitle: "Open attachments for current task", Badge: "mode", Shortcut: "!"},
 		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode", Shortcut: "?"},
 		{Kind: "help", Title: "provider commands", Subtitle: "Switch provider and connect OAuth", Badge: "provider"},
 		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys", Shortcut: ":"},
@@ -362,6 +369,38 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		}
 	}
 	return out
+}
+
+func (m *RootModel) buildAttachmentResults(query string) []controlResult {
+	if m.displayedTaskID == "" {
+		return []controlResult{{Kind: "error", Title: "No task selected"}}
+	}
+	task, err := m.repo.GetTaskByID(m.displayedTaskID)
+	if err != nil || task == nil || task.AttachmentsJSON == "" {
+		return []controlResult{{Kind: "error", Title: "No attachments found"}}
+	}
+
+	var attachments []provider.Attachment
+	if err := json.Unmarshal([]byte(task.AttachmentsJSON), &attachments); err != nil {
+		return []controlResult{{Kind: "error", Title: "Failed to parse attachments"}}
+	}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	results := make([]controlResult, 0, len(attachments))
+	for i := range attachments {
+		a := &attachments[i]
+		if query != "" && !strings.Contains(strings.ToLower(a.Filename), query) {
+			continue
+		}
+		results = append(results, controlResult{
+			Kind:       "attachment",
+			Title:      a.Filename,
+			Subtitle:   formatSize(a.Size),
+			Badge:      "file",
+			Attachment: a,
+		})
+	}
+	return results
 }
 
 func (m *RootModel) commandMatchScore(cmd controlCommand, query string) int {
@@ -428,6 +467,11 @@ func (m *RootModel) runControlResult(result controlResult) tea.Cmd {
 		m.statusLine = "Task opened: " + result.TaskTitle
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
+	case "attachment":
+		if result.Attachment != nil {
+			return m.openAttachmentCmd(*result.Attachment)
+		}
+		return nil
 	case "command":
 		return m.executeControlCommand(result.CommandID)
 	default:
@@ -496,6 +540,9 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.saveTaskPrefs()
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
+	case "open_attachments":
+		m.openControlCenter(ControlModeAttachment)
+		return nil
 	case "clear_task_search":
 		m.searchQuery = ""
 		m.statusLine = "Task search cleared"
@@ -578,6 +625,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "toggle_task_sort_direction", Title: "Toggle task sort direction", Subtitle: "Switch asc/desc task sorting", Badge: "toggle", Aliases: []string{"sort direction", "task sort direction"}, Shortcut: m.keymap.SortDirection},
 		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}, Shortcut: m.keymap.GroupTasks},
 		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}, Shortcut: m.keymap.Subtasks},
+		{ID: "open_attachments", Title: "Open attachments...", Subtitle: "Choose an attachment to open", Badge: "file", Aliases: []string{"attachments", "files"}, Shortcut: "A"},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
 		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}, Shortcut: m.keymap.Favorite},
 		{ID: "restore_policy_ask", Title: "Set restore policy: ask", Subtitle: "Prompt on startup", Badge: "restore", Aliases: []string{"restore ask"}},

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"lazy-click/internal/provider/clickup"
 	syncengine "lazy-click/internal/sync"
 	"lazy-click/internal/tui/components"
+	"lazy-click/internal/attachment"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -59,18 +62,20 @@ const (
 	ControlModeList    ControlMode = "@"
 	ControlModeTask    ControlMode = "#"
 	ControlModeHelp    ControlMode = "?"
+	ControlModeAttachment ControlMode = "!"
 )
 
 type controlResult struct {
-	Kind      string
-	Title     string
-	Subtitle  string
-	Badge     string
-	Shortcut  string
-	CommandID string
-	ListID    string
-	TaskID    string
-	TaskTitle string
+	Kind       string
+	Title      string
+	Subtitle   string
+	Badge      string
+	Shortcut   string
+	CommandID  string
+	ListID     string
+	TaskID     string
+	TaskTitle  string
+	Attachment *provider.Attachment
 }
 
 type commandUsageStat struct {
@@ -150,6 +155,7 @@ type RootModel struct {
 	activePane          int
 	repo                *cache.Repository
 	sync                SyncQueuer
+	attachments         *attachment.Manager
 	provider            string
 	activeProviderID    string
 	availableProviders  []syncengine.ProviderMeta
@@ -253,6 +259,11 @@ type copyTaskLinkResultMsg struct {
 	url string
 	err error
 }
+type attachmentDownloadResultMsg struct {
+	path string
+	err  error
+	open bool
+}
 type openTaskInBrowserResultMsg struct {
 	err error
 }
@@ -290,7 +301,7 @@ type userLoadedMsg struct {
 	err  error
 }
 
-func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, statusLine string, clickUpClientID string, oauthBackendURL string, clickUpConnected bool, needsProviderSetup bool) RootModel {
+func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachment.Manager, providerName string, statusLine string, clickUpClientID string, oauthBackendURL string, clickUpConnected bool, needsProviderSetup bool) RootModel {
 	if providerName == "" {
 		providerName = "none"
 	}
@@ -308,6 +319,7 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, providerName string, 
 	return RootModel{
 		repo:                repo,
 		sync:                syncer,
+		attachments:         attachments,
 		provider:            providerName,
 		activeProviderID:    activeProviderID,
 		availableProviders:  availableProviders,
@@ -700,6 +712,11 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusLine = "List favorite updated"
 				return m, m.loadDataCmd()
 			}
+		case m.keymap.DownloadAttachments:
+			return m, m.downloadAttachmentsCmd(false)
+		case "A":
+			m.openControlCenter(ControlModeAttachment)
+			return m, nil
 		}
 
 		if m.activePane == 0 {
@@ -934,6 +951,19 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusLine = "Opened task in browser"
 		return m, nil
 
+	case attachmentDownloadResultMsg:
+		if msg.err != nil {
+			m.statusLine = "Attachment download failed: " + msg.err.Error()
+		} else {
+			if msg.open {
+				m.statusLine = "Attachment opened: " + msg.path
+			} else {
+				m.statusLine = "Attachments downloaded"
+			}
+			m.refreshDetail(false, "")
+		}
+		return m, nil
+
 	case oauthResultMsg:
 		if msg.err != nil {
 			m.statusLine = "OAuth failed: " + msg.err.Error()
@@ -1086,7 +1116,7 @@ func (m RootModel) View() string {
 		m.vimMode,
 	)
 
-	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, a download attachments, A download & open, f/F status, r refresh, s sync, q quit"
 	if m.commentMode {
 		help = "Comment mode: type text, Enter submit, Esc cancel"
 	} else if m.openTaskPrompt {
@@ -1098,7 +1128,7 @@ func (m RootModel) View() string {
 	} else if m.restorePrompt {
 		help = "Session restore: r restore, n fresh, a always, v never"
 	} else {
-		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, f/F status, r refresh, s sync, q quit"
+		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, a download attachments, A download & open, f/F status, r refresh, s sync, q quit"
 	}
 
 	syncLine := m.syncProgressLine(totalWidth)
@@ -1528,6 +1558,69 @@ func (m RootModel) currentTaskBrowserURL() string {
 	return "https://app.clickup.com/t/" + row.ID
 }
 
+func (m RootModel) openAttachmentCmd(a provider.Attachment) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		path, err := m.attachments.Download(ctx, a.ID, a.Filename, a.URL)
+		if err != nil {
+			return attachmentDownloadResultMsg{err: err}
+		}
+		if err := openFile(path); err != nil {
+			return attachmentDownloadResultMsg{err: err}
+		}
+		return attachmentDownloadResultMsg{path: path, open: true}
+	}
+}
+
+func (m RootModel) downloadAttachmentsCmd(open bool) tea.Cmd {
+	taskID := m.displayedTaskID
+	if taskID == "" {
+		return func() tea.Msg { return attachmentDownloadResultMsg{err: fmt.Errorf("no task selected")} }
+	}
+
+	return func() tea.Msg {
+		task, err := m.repo.GetTaskByID(taskID)
+		if err != nil {
+			return attachmentDownloadResultMsg{err: err}
+		}
+		if task == nil || task.AttachmentsJSON == "" {
+			return attachmentDownloadResultMsg{err: fmt.Errorf("no attachments found")}
+		}
+
+		var attachments []provider.Attachment
+		if err := json.Unmarshal([]byte(task.AttachmentsJSON), &attachments); err != nil {
+			return attachmentDownloadResultMsg{err: err}
+		}
+
+		if len(attachments) == 0 {
+			return attachmentDownloadResultMsg{err: fmt.Errorf("no attachments found")}
+		}
+
+		ctx := context.Background()
+		var lastPath string
+		for _, a := range attachments {
+			path, err := m.attachments.Download(ctx, a.ID, a.Filename, a.URL)
+			if err != nil {
+				return attachmentDownloadResultMsg{err: err}
+			}
+			lastPath = path
+		}
+
+		if open && lastPath != "" {
+			if err := openFile(lastPath); err != nil {
+				return attachmentDownloadResultMsg{err: err}
+			}
+			return attachmentDownloadResultMsg{path: lastPath, open: true}
+		}
+
+		return attachmentDownloadResultMsg{}
+	}
+}
+
+func openFile(path string) error {
+	return openBrowser(path) // openBrowser uses xdg-open/open/start which works for files too
+}
+
 func (m RootModel) copyTaskLinkCmd() tea.Cmd {
 	url := m.currentTaskBrowserURL()
 	if strings.TrimSpace(url) == "" {
@@ -1655,6 +1748,11 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 		dueDate = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
 	}
 
+	var taskAttachments []provider.Attachment
+	if task.AttachmentsJSON != "" {
+		_ = json.Unmarshal([]byte(task.AttachmentsJSON), &taskAttachments)
+	}
+
 	descriptionLines := components.RenderMarkdownLines(task.DescriptionMD)
 	commentLines := make([]string, 0, len(comments)+1)
 	if len(comments) == 0 {
@@ -1666,6 +1764,27 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 				author = "unknown"
 			}
 			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", authorStyle.Render(author), strings.TrimSpace(c.BodyMD)))
+		}
+	}
+
+	attachmentLines := make([]string, 0, len(taskAttachments)+1)
+	if len(taskAttachments) == 0 {
+		attachmentLines = append(attachmentLines, "(no attachments)")
+	} else {
+		isKitty := components.IsKittyTerminal()
+		_, _, rightInnerWidth, _, _, _ := m.layout()
+		imageMaxWidth := rightInnerWidth - 4 // small padding
+		for _, a := range taskAttachments {
+			line := fmt.Sprintf("- %s (%s)", a.Filename, formatSize(a.Size))
+			attachmentLines = append(attachmentLines, line)
+			if isKitty && isImage(a.Filename) {
+				localPath := m.attachments.GetLocalPath(a.ID, a.Filename)
+				if _, err := os.Stat(localPath); err == nil {
+					attachmentLines = append(attachmentLines, components.RenderKittyImage(localPath, imageMaxWidth, 0))
+				} else {
+					attachmentLines = append(attachmentLines, "  [Image not downloaded. Press 'a' to download all attachments]")
+				}
+			}
 		}
 	}
 
@@ -1681,9 +1800,26 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 	}
 	sections = append(sections, "", descTitleStyle.Render("Description:"))
 	sections = append(sections, descriptionLines...)
+	sections = append(sections, "", labelStyle.Render("Attachments:"))
+	sections = append(sections, attachmentLines...)
 	sections = append(sections, "", commentsTitleStyle.Render("Comments:"))
 	sections = append(sections, commentLines...)
 	m.detailPanel.SetSections(sections)
+}
+
+func isImage(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".webp"
+}
+
+func formatSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(size)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
 }
 
 func (m *RootModel) startDetailRevalidate() tea.Cmd {
