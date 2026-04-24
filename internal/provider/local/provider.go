@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -218,6 +219,9 @@ func mapEntityToTask(row cache.TaskEntity) provider.Task {
 			Rank:  row.PriorityRank,
 			Color: row.PriorityColor,
 		}
+	}
+	if row.AttachmentsJSON != "" {
+		_ = json.Unmarshal([]byte(row.AttachmentsJSON), &task.Attachments)
 	}
 	return task
 }

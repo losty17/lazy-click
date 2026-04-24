@@ -20,6 +20,15 @@ type Tag struct {
 	Color string
 }
 
+type Attachment struct {
+	ID           string
+	Filename     string
+	URL          string
+	ThumbnailURL string
+	Size         int64
+	ContentType  string
+}
+
 type Task struct {
 	ID            string
 	Provider      string
@@ -36,6 +45,7 @@ type Task struct {
 	DueAtUnixMS   *int64
 	Assignees     []User
 	Tags          []Tag
+	Attachments   []Attachment
 	CustomFields  map[string]any
 	UpdatedAtUnix int64
 }

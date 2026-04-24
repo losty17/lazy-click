@@ -125,6 +125,16 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 				Email:    assignee.Email,
 			})
 		}
+		for _, att := range t.Attachments {
+			task.Attachments = append(task.Attachments, provider.Attachment{
+				ID:           att.ID,
+				Filename:     att.Title,
+				URL:          att.URL,
+				ThumbnailURL: att.ThumbnailLarge,
+				Size:         att.Size,
+				ContentType:  att.Extension,
+			})
+		}
 		for _, cf := range t.CustomFields {
 			task.CustomFields[cf.Name] = cf.Value
 		}
@@ -185,6 +195,16 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 			Provider: "clickup",
 			Username: assignee.Username,
 			Email:    assignee.Email,
+		})
+	}
+	for _, att := range t.Attachments {
+		task.Attachments = append(task.Attachments, provider.Attachment{
+			ID:           att.ID,
+			Filename:     att.Title,
+			URL:          att.URL,
+			ThumbnailURL: att.ThumbnailLarge,
+			Size:         att.Size,
+			ContentType:  att.Extension,
 		})
 	}
 	for _, cf := range t.CustomFields {

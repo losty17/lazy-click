@@ -89,8 +89,26 @@ type TaskDTO struct {
 	Parent       *string          `json:"parent"`
 	Assignees    []UserDTO        `json:"assignees"`
 	Tags         []TagDTO         `json:"tags"`
+	Attachments  []AttachmentDTO  `json:"attachments"`
 	CustomFields []CustomFieldDTO `json:"custom_fields"`
 	List         ListDTO          `json:"list"`
+}
+
+type AttachmentDTO struct {
+	ID           string  `json:"id"`
+	Date         string  `json:"date"`
+	Title        string  `json:"title"`
+	Type         int     `json:"type"`
+	Source       int     `json:"source"`
+	Version      int     `json:"version"`
+	Extension    string  `json:"extension"`
+	ThumbnailSmall string `json:"thumbnail_small"`
+	ThumbnailLarge string `json:"thumbnail_large"`
+	IsStreamable bool    `json:"is_streamable"`
+	URL          string  `json:"url"`
+	EmailData    any     `json:"email_data"`
+	Priority     int     `json:"priority"`
+	Size         int64   `json:"size"`
 }
 
 type TaskStatusDTO struct {

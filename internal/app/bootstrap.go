@@ -15,6 +15,7 @@ import (
 	"lazy-click/internal/provider/local"
 	syncengine "lazy-click/internal/sync"
 	"lazy-click/internal/tui"
+	"lazy-click/internal/attachment"
 )
 
 const appStateClickUpToken = "provider.clickup.oauth_token"
@@ -35,6 +36,12 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 	}
 
 	repo := cache.NewRepository(db)
+
+	attachmentDir := filepath.Join(filepath.Dir(cfg.DBPath), "attachments")
+	attManager, err := attachment.NewManager(attachmentDir)
+	if err != nil {
+		return nil, fmt.Errorf("create attachment manager: %w", err)
+	}
 
 	logger := log.New(os.Stderr, "sync: ", log.LstdFlags)
 	localProvider := local.New(repo)
@@ -74,6 +81,6 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 		needsProviderSetup = true
 	}
 
-	model := tui.NewRootModel(repo, router, router.ProviderDisplayName(), statusLine, cfg.ClickUpClientID, cfg.OAuthBackendURL, clickUpConnected, needsProviderSetup)
+	model := tui.NewRootModel(repo, router, attManager, router.ProviderDisplayName(), statusLine, cfg.ClickUpClientID, cfg.OAuthBackendURL, clickUpConnected, needsProviderSetup)
 	return NewRuntime(db, repo, syncers, model), nil
 }

@@ -21,6 +21,7 @@ func Open(path string) (*gorm.DB, error) {
 		&TagEntity{},
 		&TaskTagEntity{},
 		&CommentEntity{},
+		&AttachmentEntity{},
 		&SyncQueueEntity{},
 		&AppStateEntity{},
 	); err != nil {

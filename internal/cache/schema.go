@@ -41,10 +41,24 @@ type TaskEntity struct {
 	EstimateMS       *int64
 	DueAtUnixMS      *int64
 	AssigneesJSON    string `gorm:"type:text"`
+	AttachmentsJSON  string `gorm:"type:text"`
 	CustomFieldsJSON string `gorm:"type:text"`
 	UpdatedAtUnix    int64  `gorm:"index"`
 	LastFetchedUnix  int64  `gorm:"index;not null;default:0"`
 	UpdatedAt        time.Time
+}
+
+type AttachmentEntity struct {
+	ID            string `gorm:"primaryKey;size:128"`
+	TaskID        string `gorm:"index;size:128;not null"`
+	Filename      string `gorm:"size:256;not null"`
+	URL           string `gorm:"type:text;not null"`
+	ThumbnailURL  string `gorm:"type:text"`
+	Size          int64
+	ContentType   string `gorm:"size:128"`
+	LocalPath     string `gorm:"type:text"`
+	UpdatedAtUnix int64
+	UpdatedAt     time.Time
 }
 
 type AppStateEntity struct {

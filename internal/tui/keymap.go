@@ -18,28 +18,30 @@ type Keymap struct {
 	GroupTasks   string
 	Subtasks     string
 	CollapseAll  string
-	MeMode       string
+	MeMode             string
+	DownloadAttachments string
 }
 
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Down:         "j",
-		Up:           "k",
-		Search:       "/",
-		TaskTitle:    "t",
-		CopyTaskLink: "[",
-		Edit:         "i",
-		RefreshTask:  "R",
-		AddComment:   "c",
-		Filter:       "f",
-		Favorite:     "*",
-		SortLists:    "o",
-		FavOnly:      "v",
-		SortTasks:    "O",
-		SortDirection: "ctrl+o",
-		GroupTasks:   "g",
-		Subtasks:     "G",
-		CollapseAll:  "X",
-		MeMode:       "m",
+		Down:                "j",
+		Up:                  "k",
+		Search:              "/",
+		TaskTitle:           "t",
+		CopyTaskLink:        "[",
+		Edit:                "i",
+		RefreshTask:         "R",
+		AddComment:          "c",
+		Filter:              "f",
+		Favorite:            "*",
+		SortLists:           "o",
+		FavOnly:             "v",
+		SortTasks:           "O",
+		SortDirection:       "ctrl+o",
+		GroupTasks:          "g",
+		Subtasks:            "G",
+		CollapseAll:         "X",
+		MeMode:              "m",
+		DownloadAttachments: "a",
 	}
 }
