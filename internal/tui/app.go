@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -42,6 +43,7 @@ const (
 	appStateActiveProviderID = "ui.active_provider_id"
 	appStateClickUpToken     = "provider.clickup.oauth_token"
 	appStateMeMode           = "ui.me_mode"
+	appStateKittyGraphicsEnabled = "ui.kitty_graphics.enabled"
 
 	detailDebounceDelay = 3 * time.Second
 	searchDebounceDelay = 250 * time.Millisecond
@@ -177,6 +179,10 @@ type RootModel struct {
 	meMode              bool
 	currentUser         provider.User
 
+	kittyImageIDs map[string]uint32
+	nextKittyID   uint32
+	kittyGraphicsEnabled bool
+
 	statusFilter string
 	searchMode   bool
 	searchInput  string
@@ -244,6 +250,7 @@ type dataLoadedMsg struct {
 	restoredTaskSearch     string
 	restoredMeMode         bool
 	restoredVimMode        bool
+	restoredKittyGraphics  bool
 	restoredActiveProvider string
 	restorePolicy          RestorePolicy
 	hasRestoreSnapshot     bool
@@ -265,6 +272,10 @@ type attachmentDownloadResultMsg struct {
 	open bool
 }
 type openTaskInBrowserResultMsg struct {
+	err error
+}
+type kittyUploadResultMsg struct {
+	id  uint32
 	err error
 }
 type oauthResultMsg struct {
@@ -342,6 +353,9 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 		restorePolicy:       RestorePolicyAsk,
 		controlMode:         ControlModeCommand,
 		commandUsage:        make(map[string]commandUsageStat),
+		kittyImageIDs:       make(map[string]uint32),
+		nextKittyID:         1,
+		kittyGraphicsEnabled: false,
 	}
 }
 
@@ -567,28 +581,28 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openControlCenter(ControlModeHelp)
 			return m, nil
 		case "home":
-			m.handleMoveToTop()
+			return m, m.handleMoveToTop()
 		case "end":
-			m.handleMoveToBottom()
+			return m, m.handleMoveToBottom()
 		case "tab":
 			m.activePane = (m.activePane + 1) % 3
 		case "shift+tab", "backtab":
 			m.activePane = (m.activePane + 2) % 3
 		case m.keymap.Down, "down":
-			m.handleMove(1)
+			return m, m.handleMove(1)
 		case m.keymap.Up, "up":
-			m.handleMove(-1)
+			return m, m.handleMove(-1)
 		case "h", "left":
-			m.handleHorizontalMove(-2)
+			return m, m.handleHorizontalMove(-2)
 		case "l", "right":
-			m.handleHorizontalMove(2)
+			return m, m.handleHorizontalMove(2)
 		case "ctrl+d":
 			if m.vimMode {
-				m.handleMove(10)
+				return m, m.handleMove(10)
 			}
 		case "ctrl+u":
 			if m.vimMode {
-				m.handleMove(-10)
+				return m, m.handleMove(-10)
 			}
 		case "r":
 			return m, m.loadDataCmd()
@@ -776,6 +790,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchQuery = msg.restoredTaskSearch
 			m.meMode = msg.restoredMeMode
 			m.vimMode = msg.restoredVimMode
+			m.kittyGraphicsEnabled = msg.restoredKittyGraphics
 			if msg.restoredActiveProvider != "" && m.sync != nil {
 				if m.sync.SetActiveProvider(msg.restoredActiveProvider) {
 					m.activeProviderID = msg.restoredActiveProvider
@@ -842,13 +857,13 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusFilter != "" && !containsString(m.statuses, m.statusFilter) {
 			m.statusFilter = ""
 		}
-		m.refreshDetail(m.detailLoading && m.detailReqTaskID == m.displayedTaskID, m.detailLoadingMsg)
+		cmd := m.refreshDetail(m.detailLoading && m.detailReqTaskID == m.displayedTaskID, m.detailLoadingMsg)
 		if len(msg.lists) == 0 {
 			m.statusLine = "No lists in cache yet. Press 's' to sync now."
 		} else if m.statusLine == "" {
 			m.statusLine = "Loaded from local cache"
 		}
-		return m, nil
+		return m, cmd
 
 	case detailRevalidateTickMsg:
 		if msg.Token != m.detailReqToken {
@@ -872,15 +887,14 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailError = msg.Err.Error()
 			m.detailErrorTask = msg.TaskID
 			m.syncDetail = "task revalidate failed"
-			m.refreshDetail(false, "")
-			return m, nil
+			return m, m.refreshDetail(false, "")
 		}
 		m.detailError = ""
 		m.detailErrorTask = ""
 		m.displayedTaskID = msg.TaskID
 		m.taskTable.SetDisplayedTaskID(msg.TaskID)
 		m.syncDetail = "task revalidated"
-		m.refreshDetail(false, "")
+		return m, m.refreshDetail(false, "")
 
 	case manualTaskRefreshResultMsg:
 		m.detailLoading = false
@@ -890,8 +904,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detailErrorTask = msg.TaskID
 			m.syncDetail = "manual task refresh failed"
 			m.statusLine = "Task refresh failed: " + msg.Err.Error()
-			m.refreshDetail(false, "")
-			return m, nil
+			return m, m.refreshDetail(false, "")
 		}
 		m.detailError = ""
 		m.detailErrorTask = ""
@@ -899,7 +912,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskTable.SetDisplayedTaskID(msg.TaskID)
 		m.syncDetail = "manual task refresh complete"
 		m.statusLine = "Task refreshed"
-		m.refreshDetail(false, "")
+		return m, m.refreshDetail(false, "")
 
 	case editResultMsg:
 		if msg.err != nil {
@@ -954,13 +967,19 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case attachmentDownloadResultMsg:
 		if msg.err != nil {
 			m.statusLine = "Attachment download failed: " + msg.err.Error()
+			return m, nil
 		} else {
 			if msg.open {
 				m.statusLine = "Attachment opened: " + msg.path
 			} else {
 				m.statusLine = "Attachments downloaded"
 			}
-			m.refreshDetail(false, "")
+			return m, m.refreshDetail(false, "")
+		}
+
+	case kittyUploadResultMsg:
+		if msg.err != nil {
+			m.statusLine = "Kitty image upload failed: " + msg.err.Error()
 		}
 		return m, nil
 
@@ -1008,29 +1027,42 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *RootModel) handleMove(delta int) {
+func (m *RootModel) handleMove(delta int) tea.Cmd {
 	switch m.activePane {
 	case 0:
 		m.sidebar.Move(delta)
 	case 1:
 		m.taskTable.Move(delta)
 	case 2:
-		m.detailPanel.Move(delta)
+		return m.detailPanelMove(delta)
 	}
+	return nil
 }
 
-func (m *RootModel) handleHorizontalMove(delta int) {
+func (m *RootModel) detailPanelMove(delta int) tea.Cmd {
+	m.detailPanel.Move(delta)
+	// Movement in detail pane might reveal/hide images, so we need to refresh to trigger uploads if needed
+	return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+}
+
+func (m *RootModel) handleHorizontalMove(delta int) tea.Cmd {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveHorizontal(delta)
 	case 1:
 		m.taskTable.MoveHorizontal(delta)
 	case 2:
-		m.detailPanel.MoveHorizontal(delta)
+		return m.detailPanelMoveHorizontal(delta)
 	}
+	return nil
 }
 
-func (m *RootModel) handleMoveToTop() {
+func (m *RootModel) detailPanelMoveHorizontal(delta int) tea.Cmd {
+	m.detailPanel.MoveHorizontal(delta)
+	return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+}
+
+func (m *RootModel) handleMoveToTop() tea.Cmd {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveToTop()
@@ -1038,10 +1070,12 @@ func (m *RootModel) handleMoveToTop() {
 		m.taskTable.MoveToTop()
 	case 2:
 		m.detailPanel.MoveToTop()
+		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
+	return nil
 }
 
-func (m *RootModel) handleMoveToBottom() {
+func (m *RootModel) handleMoveToBottom() tea.Cmd {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveToBottom()
@@ -1049,12 +1083,14 @@ func (m *RootModel) handleMoveToBottom() {
 		m.taskTable.MoveToBottom()
 	case 2:
 		m.detailPanel.MoveToBottom()
+		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
+	return nil
 }
 
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
-	header := HeaderStyle.Width(totalWidth).Render(truncateLine("lazy-click", totalWidth))
+	header := HeaderStyle.Width(totalWidth).Render(components.Truncate("lazy-click", totalWidth, "..."))
 	const verticalPaneGap = 0
 	const horizontalPaneGap = 1
 
@@ -1077,9 +1113,9 @@ func (m RootModel) View() string {
 	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
 		m.taskTable.Render(m.activePane == 1, rightInnerWidth-2, tableInnerHeight),
 	)
-	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(
-		m.detailPanel.Render(m.activePane == 2, rightInnerWidth-2, detailInnerHeight),
-	)
+	
+	detailContent := m.detailPanel.Render(m.activePane == 2, rightInnerWidth-2, detailInnerHeight)
+	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(detailContent)
 
 	right := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -1136,10 +1172,10 @@ func (m RootModel) View() string {
 	screen := strings.Join([]string{
 		header,
 		body,
-		StatusStyle.Render(truncateLine(status, totalWidth)),
-		StatusStyle.Render(truncateLine(m.statusLine, totalWidth)),
+		StatusStyle.Render(components.Truncate(status, totalWidth, "...")),
+		StatusStyle.Render(components.Truncate(m.statusLine, totalWidth, "...")),
 		syncLine,
-		HelpStyle.Render(truncateLine(help, totalWidth)),
+		HelpStyle.Render(components.Truncate(help, totalWidth, "...")),
 	}, "\n")
 
 	if m.restorePrompt {
@@ -1347,6 +1383,13 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				}
 			}
 
+			kittyEnabled := false
+			if kittyRaw, err := m.repo.GetAppState(appStateKittyGraphicsEnabled); err == nil && kittyRaw != "" {
+				if parsed, parseErr := strconv.ParseBool(kittyRaw); parseErr == nil {
+					kittyEnabled = parsed
+				}
+			}
+
 			restorePolicy := RestorePolicyAsk
 			if policyRaw, err := m.repo.GetAppState(appStateRestorePolicy); err != nil {
 				return dataLoadedMsg{err: err}
@@ -1399,6 +1442,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoredTaskSearch = taskSearch
 			msg.restoredMeMode = meMode
 			msg.restoredVimMode = vimMode
+			msg.restoredKittyGraphics = kittyEnabled
 			msg.restorePolicy = restorePolicy
 			msg.hasRestoreSnapshot = hasSnapshot
 			msg.restoreSnapshot = snapshot
@@ -1491,7 +1535,7 @@ func (m RootModel) providerNeedsConnectionOverlay() bool {
 func (m RootModel) renderProviderSetupOverlay(width int) string {
 	panelWidth := min(max(width-6, 46), 96)
 	lines := []string{
-		ControlCenterTitleStyle.Render(truncateLine("Choose your default provider", panelWidth-2)),
+		ControlCenterTitleStyle.Render(components.Truncate("Choose your default provider", panelWidth-2, "...")),
 		"",
 	}
 	if len(m.availableProviders) == 0 {
@@ -1509,7 +1553,7 @@ func (m RootModel) renderProviderSetupOverlay(width int) string {
 				label = p.ID
 			}
 			line := fmt.Sprintf("%s [%s]", label, p.Kind)
-			lines = append(lines, style.Render(truncateLine(prefix+line, panelWidth-2)))
+			lines = append(lines, style.Render(components.Truncate(prefix+line, panelWidth-2, "...")))
 		}
 	}
 	lines = append(lines, "", HelpStyle.Render("Use arrows and press Enter to continue"))
@@ -1519,25 +1563,25 @@ func (m RootModel) renderProviderSetupOverlay(width int) string {
 func (m RootModel) renderProviderConnectOverlay(width int) string {
 	panelWidth := min(max(width-6, 52), 104)
 	lines := []string{
-		ControlCenterTitleStyle.Render(truncateLine("Provider requires connection", panelWidth-2)),
+		ControlCenterTitleStyle.Render(components.Truncate("Provider requires connection", panelWidth-2, "...")),
 		"",
-		truncateLine("The active provider is not connected yet.", panelWidth-2),
-		truncateLine("Press Enter to connect with OAuth.", panelWidth-2),
+		components.Truncate("The active provider is not connected yet.", panelWidth-2, "..."),
+		components.Truncate("Press Enter to connect with OAuth.", panelWidth-2, "..."),
 		"",
-		ControlCenterSelectStyle.Render(truncateLine("> Connect ClickUp OAuth (Enter)", panelWidth-2)),
+		ControlCenterSelectStyle.Render(components.Truncate("> Connect ClickUp OAuth (Enter)", panelWidth-2, "...")),
 	}
 	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m RootModel) renderOpenTaskPromptOverlay(width int) string {
 	panelWidth := min(max(width-6, 56), 110)
-	urlLine := truncateLine(m.openTaskURL, panelWidth-2)
+	urlLine := components.Truncate(m.openTaskURL, panelWidth-2, "...")
 	lines := []string{
-		ControlCenterTitleStyle.Render(truncateLine("Open task in browser?", panelWidth-2)),
+		ControlCenterTitleStyle.Render(components.Truncate("Open task in browser?", panelWidth-2, "...")),
 		"",
-		truncateLine("This will open your default browser for the selected task.", panelWidth-2),
+		components.Truncate("This will open your default browser for the selected task.", panelWidth-2, "..."),
 		"",
-		truncateLine(urlLine, panelWidth-2),
+		components.Truncate(urlLine, panelWidth-2, "..."),
 		"",
 		HelpStyle.Render("Enter/Y confirm, N/Esc cancel"),
 	}
@@ -1569,6 +1613,44 @@ func (m RootModel) openAttachmentCmd(a provider.Attachment) tea.Cmd {
 			return attachmentDownloadResultMsg{err: err}
 		}
 		return attachmentDownloadResultMsg{path: path, open: true}
+	}
+}
+
+func (m RootModel) uploadToKittyCmd(id uint32, path string) tea.Cmd {
+	return func() tea.Msg {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return kittyUploadResultMsg{id, err}
+		}
+
+		encoded := base64.StdEncoding.EncodeToString(data)
+		const chunkSize = 4096
+
+		// Use APC sequence to transmit image without displaying it immediately
+		// a=t: transmit only
+		// i: ID
+		// t=d: direct data
+		// f=100: auto-detect format
+		// q=2: quiet mode
+		for i := 0; i < len(encoded); i += chunkSize {
+			end := i + chunkSize
+			more := 1
+			if end >= len(encoded) {
+				end = len(encoded)
+				more = 0
+			}
+			payload := encoded[i:end]
+			var sequence string
+			if i == 0 {
+				sequence = fmt.Sprintf("\x1b_Ga=t,i=%d,t=d,f=100,q=2,m=%d;%s\x1b\\", id, more, payload)
+			} else {
+				sequence = fmt.Sprintf("\x1b_Gm=%d;%s\x1b\\", more, payload)
+			}
+			// Write directly to stdout to bypass any Bubbletea buffering if possible
+			// but being careful not to block.
+			_, _ = os.Stdout.WriteString(sequence)
+		}
+		return kittyUploadResultMsg{id, nil}
 	}
 }
 
@@ -1677,20 +1759,20 @@ func (m RootModel) displayedTaskRow() (components.TaskTableRow, bool) {
 	return m.taskTable.RowByID(m.displayedTaskID)
 }
 
-func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
+func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 	selected, ok := m.displayedTaskRow()
 	if !ok {
 		if loading {
 			m.detailPanel.SetSections([]string{"Loading task detail..."})
-			return
+			return nil
 		}
 		cursorTaskID := m.currentSelectedTaskID()
 		if cursorTaskID == "" {
 			m.detailPanel.SetSections([]string{"No task selected"})
-			return
+			return nil
 		}
 		m.detailPanel.SetSections([]string{"No task opened. Press Enter on a task to open details."})
-		return
+		return nil
 	}
 
 	task, err := m.repo.GetTaskByID(selected.ID)
@@ -1699,7 +1781,7 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 			"Title: " + selected.Title,
 			"Failed to load task detail: " + err.Error(),
 		})
-		return
+		return nil
 	}
 
 	sections := make([]string, 0, 32)
@@ -1730,7 +1812,7 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 			"Loading task detail from provider...",
 		)
 		m.detailPanel.SetSections(sections)
-		return
+		return nil
 	}
 
 	comments, err := m.repo.GetTaskComments(selected.ID, 50)
@@ -1767,11 +1849,12 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 		}
 	}
 
+	var cmds []tea.Cmd
 	attachmentLines := make([]string, 0, len(taskAttachments)+1)
 	if len(taskAttachments) == 0 {
 		attachmentLines = append(attachmentLines, "(no attachments)")
 	} else {
-		isKitty := components.IsKittyTerminal()
+		isKitty := components.IsKittyTerminal() && m.kittyGraphicsEnabled
 		_, _, rightInnerWidth, _, _, _ := m.layout()
 		imageMaxWidth := rightInnerWidth - 4 // small padding
 		for _, a := range taskAttachments {
@@ -1780,7 +1863,23 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 			if isKitty && isImage(a.Filename) {
 				localPath := m.attachments.GetLocalPath(a.ID, a.Filename)
 				if _, err := os.Stat(localPath); err == nil {
-					attachmentLines = append(attachmentLines, components.RenderKittyImage(localPath, imageMaxWidth, 0))
+					// Use ID-based Kitty placement
+					id, exists := m.kittyImageIDs[localPath]
+					if !exists {
+						id = m.nextKittyID
+						m.nextKittyID++
+						m.kittyImageIDs[localPath] = id
+						cmds = append(cmds, m.uploadToKittyCmd(id, localPath))
+					}
+					
+					// Get dimensions to reserve space correctly
+					w, h, err := components.GetImageDimensions(localPath)
+					if err == nil {
+						cols, rows := components.CalculateRenderSize(w, h, imageMaxWidth)
+						attachmentLines = append(attachmentLines, components.RenderKittyPlacement(id, cols, rows))
+					} else {
+						attachmentLines = append(attachmentLines, "  [Error loading image dimensions]")
+					}
 				} else {
 					attachmentLines = append(attachmentLines, "  [Image not downloaded. Press 'a' to download all attachments]")
 				}
@@ -1800,11 +1899,12 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) {
 	}
 	sections = append(sections, "", descTitleStyle.Render("Description:"))
 	sections = append(sections, descriptionLines...)
-	sections = append(sections, "", labelStyle.Render("Attachments:"))
-	sections = append(sections, attachmentLines...)
 	sections = append(sections, "", commentsTitleStyle.Render("Comments:"))
 	sections = append(sections, commentLines...)
+	sections = append(sections, "", labelStyle.Render("Attachments:"))
+	sections = append(sections, attachmentLines...)
 	m.detailPanel.SetSections(sections)
+	return tea.Batch(cmds...)
 }
 
 func isImage(filename string) bool {
@@ -1830,8 +1930,7 @@ func (m *RootModel) startDetailRevalidate() tea.Cmd {
 	if taskID == "" {
 		m.detailLoading = false
 		m.detailLoadingMsg = ""
-		m.refreshDetail(false, "")
-		return nil
+		return m.refreshDetail(false, "")
 	}
 
 	m.detailLoading = true
@@ -1840,11 +1939,14 @@ func (m *RootModel) startDetailRevalidate() tea.Cmd {
 	token := m.detailReqToken
 	m.detailLoadingMsg = "Revalidating detail..."
 	m.syncDetail = "waiting for detail revalidate debounce"
-	m.refreshDetail(true, m.detailLoadingMsg)
+	cmd := m.refreshDetail(true, m.detailLoadingMsg)
 
-	return tea.Tick(detailDebounceDelay, func(time.Time) tea.Msg {
-		return detailRevalidateTickMsg{TaskID: taskID, Token: token}
-	})
+	return tea.Batch(
+		cmd,
+		tea.Tick(detailDebounceDelay, func(time.Time) tea.Msg {
+			return detailRevalidateTickMsg{TaskID: taskID, Token: token}
+		}),
+	)
 }
 
 func (m *RootModel) selectCursorTaskForDisplayCmd() tea.Cmd {
@@ -1852,12 +1954,10 @@ func (m *RootModel) selectCursorTaskForDisplayCmd() tea.Cmd {
 	if taskID == "" {
 		m.displayedTaskID = ""
 		m.taskTable.SetDisplayedTaskID("")
-		m.refreshDetail(false, "")
-		return nil
+		return m.refreshDetail(false, "")
 	}
 	if taskID == m.displayedTaskID && !m.detailLoading {
-		m.refreshDetail(false, "")
-		return nil
+		return m.refreshDetail(false, "")
 	}
 	return m.startDetailRevalidate()
 }
@@ -1897,14 +1997,17 @@ func (m *RootModel) refreshCurrentTaskNowCmd() tea.Cmd {
 	m.detailReqToken++
 	m.detailLoadingMsg = "Refreshing task now..."
 	m.syncDetail = "manual task refresh in progress"
-	m.refreshDetail(true, m.detailLoadingMsg)
+	cmd := m.refreshDetail(true, m.detailLoadingMsg)
 
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		err := m.sync.RevalidateTask(ctx, taskID)
-		return manualTaskRefreshResultMsg{TaskID: taskID, Err: err}
-	}
+	return tea.Batch(
+		cmd,
+		func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			err := m.sync.RevalidateTask(ctx, taskID)
+			return manualTaskRefreshResultMsg{TaskID: taskID, Err: err}
+		},
+	)
 }
 
 func (m RootModel) editSelectedTaskCmd() tea.Cmd {
@@ -2208,20 +2311,6 @@ func totalHeightFromModel(height int) int {
 		return height
 	}
 	return 24
-}
-
-func truncateLine(s string, width int) string {
-	if width <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= width {
-		return s
-	}
-	if width == 1 {
-		return "…"
-	}
-	return string(r[:width-1]) + "…"
 }
 
 func overlayCentered(base string, overlay string, width int, y int) string {

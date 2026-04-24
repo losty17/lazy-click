@@ -127,18 +127,8 @@ func (m *SidebarModel) Render(active bool, width int, height int) string {
 
 	// Pad to the requested height so the panel always renders as a full rectangle.
 	for len(lines) < height {
-		lines = append(lines, "")
+		lines = append(lines, strings.Repeat(" ", width))
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-func truncateText(s string, width int) string {
-	if len(s) <= width {
-		return s
-	}
-	if width <= 3 {
-		return s[:width]
-	}
-	return s[:width-3] + "..."
 }
