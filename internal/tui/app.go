@@ -1667,6 +1667,9 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 		imageMaxWidth := rightInnerWidth - 4 // small padding
 		for _, a := range taskAttachments {
 			line := fmt.Sprintf("- %s (%s)", a.Filename, formatSize(a.Size))
+			if a.URL != "" {
+				line += fmt.Sprintf(" [%s]", a.URL)
+			}
 			attachmentLines = append(attachmentLines, line)
 			if isKitty && isImage(a.Filename) {
 				localPath := m.attachments.GetLocalPath(a.ID, a.Filename)

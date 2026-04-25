@@ -84,7 +84,7 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 			ExternalID:    t.ID,
 			ListID:        listID,
 			Title:         t.Name,
-			DescriptionMD: t.Description,
+			DescriptionMD: maybeDecodeRichText(t.Description),
 			Status:        t.Status.Status,
 			StatusColor:   t.Status.Color,
 			CustomFields:  map[string]any{},
@@ -173,7 +173,7 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 		ExternalID:    t.ID,
 		ListID:        t.List.ID,
 		Title:         t.Name,
-		DescriptionMD: t.Description,
+		DescriptionMD: maybeDecodeRichText(t.Description),
 		Status:        t.Status.Status,
 		StatusColor:   t.Status.Color,
 		CustomFields:  map[string]any{},
@@ -305,48 +305,120 @@ func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (
 	}, nil
 }
 
+func maybeDecodeRichText(s string) string {
+	if s == "" {
+		return ""
+	}
+	// If it's a JSON string representing rich text, try to decode it.
+	if (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) || (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
+		return decodeCommentText(json.RawMessage(s))
+	}
+	return s
+}
+
 func decodeCommentText(raw json.RawMessage) string {
 	var plain string
 	if err := json.Unmarshal(raw, &plain); err == nil {
 		return plain
 	}
 
-	// Try to parse as ClickUp rich text (array of objects)
+	// Try to parse as ClickUp rich text (array of objects) or Quill Delta (ops)
 	var rich []map[string]any
-	if err := json.Unmarshal(raw, &rich); err == nil {
-		var buf strings.Builder
-		for _, part := range rich {
-			if text, ok := part["text"].(string); ok && text != "" {
-				buf.WriteString(text)
-				continue
-			}
 
-			// Handle Mentions
-			if mention, ok := part["type"].(string); ok && mention == "mention" {
-				if user, ok := part["user"].(map[string]any); ok {
-					if username, ok := user["username"].(string); ok {
-						buf.WriteString("@" + username)
-						continue
-					}
-				}
-			}
-
-			// Handle Embeds
-			if _, ok := part["embed"]; ok {
-				buf.WriteString("[Embed]")
-				continue
-			}
-
-			// Handle Attachments
-			if _, ok := part["attachment"]; ok {
-				buf.WriteString("[Attachment]")
-				continue
-			}
-		}
-		return buf.String()
+	// Check if it's Quill Delta format { "ops": [...] }
+	var delta struct {
+		Ops []map[string]any `json:"ops"`
+	}
+	if err := json.Unmarshal(raw, &delta); err == nil && len(delta.Ops) > 0 {
+		rich = delta.Ops
+	} else if err := json.Unmarshal(raw, &rich); err != nil {
+		return string(raw)
 	}
 
-	return string(raw)
+	var buf strings.Builder
+	for _, part := range rich {
+		// Handle Quill Delta 'insert' style
+		content := part
+		if insert, ok := part["insert"]; ok {
+			if s, ok := insert.(string); ok {
+				buf.WriteString(s)
+				continue
+			}
+			if m, ok := insert.(map[string]any); ok {
+				content = m
+			}
+		}
+
+		if text, ok := content["text"].(string); ok && text != "" {
+			buf.WriteString(text)
+			continue
+		}
+
+		// Handle Mentions
+		if mentionType, ok := content["type"].(string); ok && mentionType == "mention" {
+			if user, ok := content["user"].(map[string]any); ok {
+				if username, ok := user["username"].(string); ok {
+					buf.WriteString("@" + username)
+					continue
+				}
+			}
+		}
+
+		// Handle Embeds
+		if embed, ok := content["embed"]; ok {
+			url := ""
+			if s, ok := content["url"].(string); ok {
+				url = s
+			} else if s, ok := content["link"].(string); ok {
+				url = s
+			} else if m, ok := embed.(map[string]any); ok {
+				if s, ok := m["url"].(string); ok {
+					url = s
+				} else if s, ok := m["link"].(string); ok {
+					url = s
+				}
+			}
+			if url != "" {
+				buf.WriteString(fmt.Sprintf("[Embed: %s]", url))
+			} else {
+				buf.WriteString("[Embed]")
+			}
+			continue
+		}
+
+		// Handle Attachments
+		if attachment, ok := content["attachment"]; ok {
+			url := ""
+			if s, ok := content["url"].(string); ok {
+				url = s
+			} else if s, ok := content["link"].(string); ok {
+				url = s
+			} else if m, ok := attachment.(map[string]any); ok {
+				if s, ok := m["url"].(string); ok {
+					url = s
+				} else if s, ok := m["link"].(string); ok {
+					url = s
+				}
+			}
+			if url != "" {
+				buf.WriteString(fmt.Sprintf("[Attachment: %s]", url))
+			} else {
+				buf.WriteString("[Attachment]")
+			}
+			continue
+		}
+
+		// Quill Delta video/image embeds
+		if video, ok := content["video"].(string); ok {
+			buf.WriteString(fmt.Sprintf("[Video: %s]", video))
+			continue
+		}
+		if image, ok := content["image"].(string); ok {
+			buf.WriteString(fmt.Sprintf("[Image: %s]", image))
+			continue
+		}
+	}
+	return buf.String()
 }
 
 func parseUnixOrZero(value string) int64 {
