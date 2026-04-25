@@ -251,8 +251,9 @@ func (p *Provider) GetTaskComments(ctx context.Context, taskID string) ([]provid
 				Username: c.User.Username,
 				Email:    c.User.Email,
 			},
-			BodyMD:        decodeCommentText(c.Comment),
-			CreatedAtUnix: parseUnixOrZero(c.Date),
+			BodyMD:         decodeCommentText(c.Comment),
+			RawPayloadJSON: string(c.Comment),
+			CreatedAtUnix:  parseUnixOrZero(c.Date),
 		})
 	}
 	return out, nil
@@ -300,8 +301,9 @@ func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (
 			Username: resp.User.Username,
 			Email:    resp.User.Email,
 		},
-		BodyMD:        decodeCommentText(resp.Comment),
-		CreatedAtUnix: parseUnixOrZero(resp.Date),
+		BodyMD:         decodeCommentText(resp.Comment),
+		RawPayloadJSON: string(resp.Comment),
+		CreatedAtUnix:  parseUnixOrZero(resp.Date),
 	}, nil
 }
 
@@ -341,7 +343,16 @@ func decodeCommentText(raw json.RawMessage) string {
 		content := part
 		if insert, ok := part["insert"]; ok {
 			if s, ok := insert.(string); ok {
-				buf.WriteString(s)
+				rendered := s
+				if attributes, ok := part["attributes"].(map[string]any); ok {
+					if code, ok := attributes["code"].(bool); ok && code {
+						rendered = "`" + rendered + "`"
+					}
+					if link, ok := attributes["link"].(string); ok {
+						rendered = fmt.Sprintf("[%s](%s)", rendered, link)
+					}
+				}
+				buf.WriteString(rendered)
 				continue
 			}
 			if m, ok := insert.(map[string]any); ok {
@@ -350,7 +361,16 @@ func decodeCommentText(raw json.RawMessage) string {
 		}
 
 		if text, ok := content["text"].(string); ok && text != "" {
-			buf.WriteString(text)
+			rendered := text
+			if attributes, ok := part["attributes"].(map[string]any); ok {
+				if code, ok := attributes["code"].(bool); ok && code {
+					rendered = "`" + rendered + "`"
+				}
+				if link, ok := attributes["link"].(string); ok {
+					rendered = fmt.Sprintf("[%s](%s)", rendered, link)
+				}
+			}
+			buf.WriteString(rendered)
 			continue
 		}
 
@@ -364,47 +384,32 @@ func decodeCommentText(raw json.RawMessage) string {
 			}
 		}
 
-		// Handle Embeds
-		if embed, ok := content["embed"]; ok {
-			url := ""
-			if s, ok := content["url"].(string); ok {
+		// Handle Embeds, Attachments & Bookmarks more generically
+		url := ""
+		for _, key := range []string{"url", "link", "original_url"} {
+			if s, ok := content[key].(string); ok && s != "" {
 				url = s
-			} else if s, ok := content["link"].(string); ok {
-				url = s
-			} else if m, ok := embed.(map[string]any); ok {
-				if s, ok := m["url"].(string); ok {
-					url = s
-				} else if s, ok := m["link"].(string); ok {
-					url = s
-				}
+				break
 			}
-			if url != "" {
-				buf.WriteString(fmt.Sprintf("[Embed: %s]", url))
-			} else {
-				buf.WriteString("[Embed]")
-			}
-			continue
 		}
 
-		// Handle Attachments
-		if attachment, ok := content["attachment"]; ok {
-			url := ""
-			if s, ok := content["url"].(string); ok {
-				url = s
-			} else if s, ok := content["link"].(string); ok {
-				url = s
-			} else if m, ok := attachment.(map[string]any); ok {
-				if s, ok := m["url"].(string); ok {
-					url = s
-				} else if s, ok := m["link"].(string); ok {
-					url = s
+		// Check nested objects (embed, attachment, bookmark, link_preview)
+		for _, nestedKey := range []string{"embed", "attachment", "link_preview", "bookmark"} {
+			if nested, ok := content[nestedKey].(map[string]any); ok {
+				for _, key := range []string{"url", "link", "original_url"} {
+					if s, ok := nested[key].(string); ok && s != "" {
+						url = s
+						break
+					}
 				}
 			}
 			if url != "" {
-				buf.WriteString(fmt.Sprintf("[Attachment: %s]", url))
-			} else {
-				buf.WriteString("[Attachment]")
+				break
 			}
+		}
+
+		if url != "" {
+			buf.WriteString(fmt.Sprintf("[Link: %s]", url))
 			continue
 		}
 

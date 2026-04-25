@@ -20,6 +20,7 @@ type Keymap struct {
 	CollapseAll  string
 	MeMode             string
 	DownloadAttachments string
+	Debug               string
 }
 
 func DefaultKeymap() Keymap {
@@ -43,5 +44,6 @@ func DefaultKeymap() Keymap {
 		CollapseAll:         "X",
 		MeMode:              "m",
 		DownloadAttachments: "a",
+		Debug:               "ctrl+d",
 	}
 }

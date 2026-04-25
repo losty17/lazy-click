@@ -69,12 +69,13 @@ func (e *Engine) applyQueueItem(ctx context.Context, item cache.SyncQueueEntity)
 			authorName = comment.Author.Email
 		}
 		return e.repo.SaveComments([]cache.CommentEntity{{
-			ID:            comment.ID,
-			TaskID:        comment.TaskID,
-			AuthorID:      comment.Author.ID,
-			AuthorName:    authorName,
-			BodyMD:        comment.BodyMD,
-			CreatedAtUnix: comment.CreatedAtUnix,
+			ID:             comment.ID,
+			TaskID:         comment.TaskID,
+			AuthorID:       comment.Author.ID,
+			AuthorName:     authorName,
+			BodyMD:         comment.BodyMD,
+			RawPayloadJSON: comment.RawPayloadJSON,
+			CreatedAtUnix:  comment.CreatedAtUnix,
 		}})
 	default:
 		return fmt.Errorf("unsupported queue operation: %s", item.Operation)

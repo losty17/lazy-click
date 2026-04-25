@@ -52,11 +52,12 @@ type Task struct {
 }
 
 type Comment struct {
-	ID            string
-	TaskID        string
-	Author        User
-	BodyMD        string
-	CreatedAtUnix int64
+	ID             string
+	TaskID         string
+	Author         User
+	BodyMD         string
+	RawPayloadJSON string
+	CreatedAtUnix  int64
 }
 
 type Space struct {

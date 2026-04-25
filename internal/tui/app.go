@@ -148,6 +148,7 @@ type RootModel struct {
 	sync                SyncQueuer
 	attachments         *attachment.Manager
 	provider            string
+	debugMode           bool
 	activeProviderID    string
 	availableProviders  []syncengine.ProviderMeta
 	clickUpConnected    bool
@@ -469,6 +470,15 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.selectCursorTaskForDisplayCmd()
 		}
 
+		if msg.Type == tea.KeyEnter && m.activePane == 2 {
+			url := m.currentTaskBrowserURL()
+			if url != "" {
+				m.openTaskURL = url
+				m.openTaskPrompt = true
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.persistSessionSnapshot()
@@ -636,6 +646,14 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.keymap.DownloadAttachments:
 			return m, m.downloadAttachmentsCmd(false)
+		case m.keymap.Debug:
+			m.debugMode = !m.debugMode
+			if m.debugMode {
+				m.statusLine = "Debug mode enabled"
+			} else {
+				m.statusLine = "Debug mode disabled"
+			}
+			return m, m.refreshDetail(false, "")
 		case "A":
 			m.openControlCenter(ControlModeAttachment)
 			return m, nil
@@ -1654,6 +1672,9 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 				author = "unknown"
 			}
 			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", authorStyle.Render(author), strings.TrimSpace(c.BodyMD)))
+			if m.debugMode && c.RawPayloadJSON != "" {
+				commentLines = append(commentLines, "  "+valueStyle.Render("[RAW]: "+c.RawPayloadJSON))
+			}
 		}
 	}
 
@@ -1878,11 +1899,12 @@ func (m RootModel) submitCommentCmd() tea.Cmd {
 		now := time.Now().UnixMilli()
 		localCommentID := fmt.Sprintf("local-%d", now)
 		if err := m.repo.SaveComments([]cache.CommentEntity{{
-			ID:            localCommentID,
-			TaskID:        taskID,
-			AuthorName:    "you",
-			BodyMD:        text,
-			CreatedAtUnix: now,
+			ID:             localCommentID,
+			TaskID:         taskID,
+			AuthorName:     "you",
+			BodyMD:         text,
+			RawPayloadJSON: text,
+			CreatedAtUnix:  now,
 		}}); err != nil {
 			return commentResultMsg{err: err}
 		}

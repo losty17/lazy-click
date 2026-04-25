@@ -89,13 +89,14 @@ type TaskTagEntity struct {
 }
 
 type CommentEntity struct {
-	ID            string `gorm:"primaryKey;size:128"`
-	TaskID        string `gorm:"index;size:128;not null"`
-	AuthorID      string `gorm:"size:128"`
-	AuthorName    string `gorm:"size:128"`
-	BodyMD        string `gorm:"type:text;not null"`
-	CreatedAtUnix int64  `gorm:"index"`
-	UpdatedAt     time.Time
+	ID             string `gorm:"primaryKey;size:128"`
+	TaskID         string `gorm:"index;size:128;not null"`
+	AuthorID       string `gorm:"size:128"`
+	AuthorName     string `gorm:"size:128"`
+	BodyMD         string `gorm:"type:text;not null"`
+	RawPayloadJSON string `gorm:"type:text"`
+	CreatedAtUnix  int64  `gorm:"index"`
+	UpdatedAt      time.Time
 }
 
 type SyncQueueEntity struct {

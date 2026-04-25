@@ -61,7 +61,32 @@ func (r *Repository) SaveTasks(tasks []TaskEntity) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for _, task := range tasks {
 			task.LastFetchedUnix = now
-			if err := tx.Save(&task).Error; err != nil {
+			task.UpdatedAt = time.Now()
+
+			// Use Upsert logic to avoid overwriting rich data (Description, Attachments)
+			// with empty values if they were fetched by a more detailed API call (like GetTask)
+			// but are missing in the current list sync.
+			updateColumns := []string{
+				"provider", "external_id", "list_id", "parent_task_id", "is_subtask",
+				"title", "status", "status_color", "priority_key", "priority_label",
+				"priority_rank", "priority_color", "estimate_ms", "due_at_unix_ms",
+				"assignees_json", "custom_fields_json", "updated_at_unix", "last_fetched_unix",
+				"updated_at",
+			}
+
+			// Only update description/attachments if the incoming task has them.
+			// This prevents the 'GetTasks' (list) call from clearing data fetched by 'GetTask' (detail).
+			if task.DescriptionMD != "" {
+				updateColumns = append(updateColumns, "description_md")
+			}
+			if task.AttachmentsJSON != "" {
+				updateColumns = append(updateColumns, "attachments_json")
+			}
+
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "id"}},
+				DoUpdates: clause.AssignmentColumns(updateColumns),
+			}).Create(&task).Error; err != nil {
 				return err
 			}
 

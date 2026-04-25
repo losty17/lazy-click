@@ -136,8 +136,9 @@ func (p *Provider) GetTaskComments(ctx context.Context, taskID string) ([]provid
 				Provider: ProviderType,
 				Username: row.AuthorName,
 			},
-			BodyMD:        row.BodyMD,
-			CreatedAtUnix: row.CreatedAtUnix,
+			BodyMD:         row.BodyMD,
+			RawPayloadJSON: row.RawPayloadJSON,
+			CreatedAtUnix:  row.CreatedAtUnix,
 		})
 	}
 	return out, nil
@@ -176,22 +177,24 @@ func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (
 	_ = ctx
 	now := time.Now().UnixMilli()
 	comment := cache.CommentEntity{
-		ID:            fmt.Sprintf("local-provider-%d", now),
-		TaskID:        taskID,
-		AuthorID:      "local-user",
-		AuthorName:    "you",
-		BodyMD:        text,
-		CreatedAtUnix: now,
+		ID:             fmt.Sprintf("local-provider-%d", now),
+		TaskID:         taskID,
+		AuthorID:       "local-user",
+		AuthorName:     "you",
+		BodyMD:         text,
+		RawPayloadJSON: text,
+		CreatedAtUnix:  now,
 	}
 	if err := p.repo.SaveComments([]cache.CommentEntity{comment}); err != nil {
 		return provider.Comment{}, err
 	}
 	return provider.Comment{
-		ID:            comment.ID,
-		TaskID:        taskID,
-		Author:        provider.User{ID: "local-user", Provider: ProviderType, Username: "you"},
-		BodyMD:        text,
-		CreatedAtUnix: now,
+		ID:             comment.ID,
+		TaskID:         taskID,
+		Author:         provider.User{ID: "local-user", Provider: ProviderType, Username: "you"},
+		BodyMD:         text,
+		RawPayloadJSON: text,
+		CreatedAtUnix:  now,
 	}, nil
 }
 

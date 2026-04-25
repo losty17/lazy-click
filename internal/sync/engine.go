@@ -201,12 +201,13 @@ func (e *Engine) syncTaskComments(ctx context.Context, taskID string) error {
 			authorName = comment.Author.Email
 		}
 		rows = append(rows, cache.CommentEntity{
-			ID:            comment.ID,
-			TaskID:        taskID,
-			AuthorID:      comment.Author.ID,
-			AuthorName:    authorName,
-			BodyMD:        comment.BodyMD,
-			CreatedAtUnix: comment.CreatedAtUnix,
+			ID:             comment.ID,
+			TaskID:         taskID,
+			AuthorID:       comment.Author.ID,
+			AuthorName:     authorName,
+			BodyMD:         comment.BodyMD,
+			RawPayloadJSON: comment.RawPayloadJSON,
+			CreatedAtUnix:  comment.CreatedAtUnix,
 		})
 	}
 	if err := e.repo.SaveComments(rows); err != nil {
