@@ -6,13 +6,13 @@ import (
 	"unicode/utf8"
 )
 
-var ansiRegex = regexp.MustCompile(`\x1b_G.*?\x1b\\|\x1b\[[0-9;]*[a-zA-Z]|\x1b\][0-9];.*?\x07`)
+var AnsiRegex = regexp.MustCompile(`\x1b_G.*?\x1b\\|\x1b\[[0-9;]*[a-zA-Z]|\x1b\][0-9];.*?\x07`)
 
 func DisplayWidth(s string) int {
 	// Strip ANSI and APC sequences to get visual width.
 	// This is a simplified approach; it doesn't handle double-width runes, 
 	// but it's enough for our current needs with ASCII/UTF-8 labels.
-	clean := ansiRegex.ReplaceAllString(s, "")
+	clean := AnsiRegex.ReplaceAllString(s, "")
 	return utf8.RuneCountInString(clean)
 }
 
@@ -36,7 +36,7 @@ func Truncate(s string, width int, tail string) string {
 	i := 0
 	for i < len(s) {
 		// Check if we are at the start of an ANSI sequence
-		if loc := ansiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+		if loc := AnsiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
 			seq := s[i : i+loc[1]]
 			result.WriteString(seq)
 			i += loc[1]

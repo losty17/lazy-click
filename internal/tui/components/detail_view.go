@@ -2,6 +2,7 @@ package components
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -153,10 +154,6 @@ func (m DetailModel) expandedLines(width int) []string {
 		}
 
 		for _, part := range parts {
-			if strings.Contains(part, "\x1b") {
-				lines = append(lines, part)
-				continue
-			}
 			formattedLines := breakLines(part, width)
 			lines = append(lines, formattedLines...)
 		}
@@ -170,21 +167,60 @@ func breakLines(s string, width int) []string {
 		return []string{}
 	}
 
-	lines := []string{}
-	for len(s) > width {
-		breakPoint := strings.LastIndex(s[:width], " ")
-		if breakPoint == -1 {
-			breakPoint = width
-		}
-		if breakPoint == 0 {
-			breakPoint = 1
-		}
-		lines = append(lines, strings.Trim(s[:breakPoint], " "))
-		s = s[breakPoint:]
+	// If it's a Kitty image placement, don't wrap it.
+	if strings.Contains(s, "\x1b_G") {
+		return []string{s}
 	}
 
-	s = strings.Trim(s, " ")
-	lines = append(lines, s)
+	lines := []string{}
+	var current strings.Builder
+	currentDisplayWidth := 0
+
+	i := 0
+	for i < len(s) {
+		// Check for ANSI sequence
+		if loc := AnsiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+			seq := s[i : i+loc[1]]
+			current.WriteString(seq)
+			i += loc[1]
+			continue
+		}
+
+		// Handle normal rune
+		r, size := utf8.DecodeRuneInString(s[i:])
+		rWidth := 1 // Simplified, same as DisplayWidth
+
+		if currentDisplayWidth+rWidth > width {
+			// Time to wrap. 
+			// Try to find a space to break at
+			line := current.String()
+			breakPoint := strings.LastIndex(line, " ")
+			
+			// We only want to break at a space if it's reasonably close to the end
+			// to avoid weirdly short lines. But let's keep it simple for now.
+			if breakPoint != -1 && breakPoint > width/2 {
+				// Split at space
+				lines = append(lines, line[:breakPoint])
+				remainingInLine := line[breakPoint+1:]
+				current.Reset()
+				current.WriteString(remainingInLine)
+				currentDisplayWidth = DisplayWidth(remainingInLine)
+			} else {
+				// Hard break
+				lines = append(lines, line)
+				current.Reset()
+				currentDisplayWidth = 0
+			}
+		}
+
+		current.WriteRune(r)
+		currentDisplayWidth += rWidth
+		i += size
+	}
+
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
 
 	return lines
 }

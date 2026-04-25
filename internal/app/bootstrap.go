@@ -18,7 +18,7 @@ import (
 	"lazy-click/internal/attachment"
 )
 
-const appStateClickUpToken = "provider.clickup.oauth_token"
+const appStateClickUpToken = "provider.clickup.pat"
 const appStateActiveProviderID = "ui.active_provider_id"
 
 func Bootstrap(ctx context.Context) (*Runtime, error) {
@@ -63,12 +63,17 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 
 	router := syncengine.NewRouter([]syncengine.ProviderNode{
 		syncengine.BuildProviderNode(syncengine.ProviderMeta{ID: "local", Kind: "local", DisplayName: "Local"}, localEngine, localProvider),
-		syncengine.BuildProviderNode(syncengine.ProviderMeta{ID: "clickup", Kind: "clickup", DisplayName: "ClickUp"}, clickupEngine, clickupProvider),
+		syncengine.BuildProviderNode(syncengine.ProviderMeta{
+			ID:                "clickup",
+			Kind:              "clickup",
+			DisplayName:       "ClickUp",
+			TokenInstructions: "Settings > ClickUp API > API Token",
+		}, clickupEngine, clickupProvider),
 	}, activeProviderID)
 
 	statusLine := ""
 	if strings.TrimSpace(clickupToken) == "" {
-		statusLine = "ClickUp is available but not connected; run control center command: Connect ClickUp (OAuth)"
+		statusLine = "ClickUp is available but not connected; run control center command: Set ClickUp Personal Access Token"
 	}
 	clickUpConnected := strings.TrimSpace(clickupToken) != ""
 
@@ -81,6 +86,6 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 		needsProviderSetup = true
 	}
 
-	model := tui.NewRootModel(repo, router, attManager, router.ProviderDisplayName(), statusLine, cfg.ClickUpClientID, cfg.OAuthBackendURL, clickUpConnected, needsProviderSetup)
+	model := tui.NewRootModel(repo, router, attManager, router.ProviderDisplayName(), statusLine, clickUpConnected, needsProviderSetup)
 	return NewRuntime(db, repo, syncers, model), nil
 }

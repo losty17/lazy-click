@@ -34,6 +34,7 @@ type Task struct {
 	Provider      string
 	ExternalID    string
 	ListID        string
+	ListIDs       []string
 	ParentTaskID  string
 	IsSubtask     bool
 	Title         string

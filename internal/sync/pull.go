@@ -113,6 +113,7 @@ func mapTaskToEntity(task provider.Task, listID string) cache.TaskEntity {
 		Status:        task.Status,
 		StatusColor:   task.StatusColor,
 		UpdatedAtUnix: task.UpdatedAtUnix,
+		ListIDs:       task.ListIDs,
 	}
 	if task.Priority != nil {
 		row.PriorityKey = task.Priority.Key

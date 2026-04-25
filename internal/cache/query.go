@@ -97,43 +97,45 @@ func (r *Repository) GetMostRecentlyOpenedListID() (string, error) {
 func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {
 	stmt := r.db.Model(&TaskEntity{})
 	if listID != "" {
-		stmt = stmt.Where("list_id = ?", listID)
+		stmt = stmt.Joins("JOIN task_list_join_entities ON task_list_join_entities.task_id = task_entities.id").
+			Where("task_list_join_entities.list_id = ?", listID)
 	}
 	var statuses []string
-	err := stmt.Where("status <> ''").Distinct().Order("status asc").Pluck("status", &statuses).Error
+	err := stmt.Where("task_entities.status <> ''").Distinct().Order("task_entities.status asc").Pluck("status", &statuses).Error
 	return statuses, err
 }
 
 func (r *Repository) GetTasksByQuery(q TaskListQuery) ([]TaskEntity, error) {
 	stmt := r.db.Model(&TaskEntity{})
 	if q.Provider != "" {
-		stmt = stmt.Where("provider = ?", q.Provider)
+		stmt = stmt.Where("task_entities.provider = ?", q.Provider)
 	}
 	if q.ListID != "" {
-		stmt = stmt.Where("list_id = ?", q.ListID)
+		stmt = stmt.Joins("JOIN task_list_join_entities ON task_list_join_entities.task_id = task_entities.id").
+			Where("task_list_join_entities.list_id = ?", q.ListID)
 	}
 
 	if len(q.Statuses) > 0 {
-		stmt = stmt.Where("status IN ?", q.Statuses)
+		stmt = stmt.Where("task_entities.status IN ?", q.Statuses)
 	}
 	if len(q.AssigneeIDs) > 0 {
 		for _, id := range q.AssigneeIDs {
 			// Simplistic JSON search using LIKE. Works for basic user IDs in ClickUp's JSON format.
-			stmt = stmt.Where("assignees_json LIKE ?", "%\"id\":\""+id+"\"%")
+			stmt = stmt.Where("task_entities.assignees_json LIKE ?", "%\"id\":\""+id+"\"%")
 		}
 	}
 	if !q.IncludeClosed {
-		stmt = stmt.Where("status <> ?", "closed")
+		stmt = stmt.Where("task_entities.status <> ?", "closed")
 	}
 	if q.Search != "" {
-		stmt = stmt.Where("title LIKE ? OR description_md LIKE ?", "%"+q.Search+"%", "%"+q.Search+"%")
+		stmt = stmt.Where("task_entities.title LIKE ? OR task_entities.description_md LIKE ?", "%"+q.Search+"%", "%"+q.Search+"%")
 	}
 	if q.Limit > 0 {
 		stmt = stmt.Limit(q.Limit).Offset(q.Offset)
 	}
 
 	var tasks []TaskEntity
-	err := stmt.Order("updated_at_unix desc").Find(&tasks).Error
+	err := stmt.Order("task_entities.updated_at_unix desc").Find(&tasks).Error
 	return tasks, err
 }
 

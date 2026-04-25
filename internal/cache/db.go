@@ -18,6 +18,7 @@ func Open(path string) (*gorm.DB, error) {
 		&SpaceEntity{},
 		&ListEntity{},
 		&TaskEntity{},
+		&TaskListJoinEntity{},
 		&TagEntity{},
 		&TaskTagEntity{},
 		&CommentEntity{},

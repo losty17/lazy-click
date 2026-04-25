@@ -24,8 +24,8 @@ type Keymap struct {
 
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Down:                "j",
-		Up:                  "k",
+		Down:                "down",
+		Up:                  "up",
 		Search:              "/",
 		TaskTitle:           "t",
 		CopyTaskLink:        "[",

@@ -92,6 +92,7 @@ type TaskDTO struct {
 	Attachments  []AttachmentDTO  `json:"attachments"`
 	CustomFields []CustomFieldDTO `json:"custom_fields"`
 	List         ListDTO          `json:"list"`
+	Lists        []ListDTO        `json:"lists"`
 }
 
 type AttachmentDTO struct {

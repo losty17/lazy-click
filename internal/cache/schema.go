@@ -27,7 +27,7 @@ type TaskEntity struct {
 	ID               string `gorm:"primaryKey;size:128"`
 	Provider         string `gorm:"index;size:32;not null"`
 	ExternalID       string `gorm:"index;size:128;not null"`
-	ListID           string `gorm:"index;size:128;not null"`
+	ListID           string `gorm:"index;size:128;not null"` // Primary list (home list)
 	ParentTaskID     string `gorm:"index;size:128"`
 	IsSubtask        bool   `gorm:"index;not null;default:false"`
 	Title            string `gorm:"size:1024;not null"`
@@ -46,6 +46,13 @@ type TaskEntity struct {
 	UpdatedAtUnix    int64  `gorm:"index"`
 	LastFetchedUnix  int64  `gorm:"index;not null;default:0"`
 	UpdatedAt        time.Time
+
+	ListIDs []string `gorm:"-"`
+}
+
+type TaskListJoinEntity struct {
+	TaskID string `gorm:"primaryKey;size:128"`
+	ListID string `gorm:"primaryKey;size:128"`
 }
 
 type AttachmentEntity struct {

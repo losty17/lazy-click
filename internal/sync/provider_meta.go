@@ -1,7 +1,8 @@
 package syncengine
 
 type ProviderMeta struct {
-	ID          string
-	Kind        string
-	DisplayName string
+	ID                string
+	Kind              string
+	DisplayName       string
+	TokenInstructions string
 }

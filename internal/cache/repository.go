@@ -64,6 +64,24 @@ func (r *Repository) SaveTasks(tasks []TaskEntity) error {
 			if err := tx.Save(&task).Error; err != nil {
 				return err
 			}
+
+			allListIDs := task.ListIDs
+			if len(allListIDs) == 0 && task.ListID != "" {
+				allListIDs = []string{task.ListID}
+			}
+
+			for _, lID := range allListIDs {
+				if lID == "" {
+					continue
+				}
+				join := TaskListJoinEntity{
+					TaskID: task.ID,
+					ListID: lID,
+				}
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&join).Error; err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})

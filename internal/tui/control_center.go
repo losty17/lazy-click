@@ -25,33 +25,6 @@ type controlCommand struct {
 	Badge       string
 	Shortcut    string
 	Aliases     []string
-	VimAdvanced bool
-}
-
-type restoreOption struct {
-	Action   string
-	Label    string
-	Shortcut string
-}
-
-func restorePromptOptions() []restoreOption {
-	return []restoreOption{
-		{Action: "restore", Label: "Restore previous session", Shortcut: "r"},
-		{Action: "fresh", Label: "Start fresh", Shortcut: "n"},
-		{Action: "always", Label: "Set policy to always", Shortcut: "a"},
-		{Action: "never", Label: "Set policy to never", Shortcut: "v"},
-	}
-}
-
-func normalizeRestorePolicy(raw string) RestorePolicy {
-	switch RestorePolicy(strings.TrimSpace(strings.ToLower(raw))) {
-	case RestorePolicyAlways:
-		return RestorePolicyAlways
-	case RestorePolicyNever:
-		return RestorePolicyNever
-	default:
-		return RestorePolicyAsk
-	}
 }
 
 func (m *RootModel) openControlCenter(mode ControlMode) {
@@ -76,16 +49,37 @@ func (m *RootModel) updateControlCenter(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	if m.vimMode {
-		switch msg.String() {
-		case "j":
-			if m.controlSelected+1 < len(m.controlResults) {
-				m.controlSelected++
+	if m.controlMode == ControlModePAT {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.closeControlCenter()
+			return nil
+		case tea.KeyEnter:
+			m.closeControlCenter()
+			token := strings.TrimSpace(m.patInput)
+			if token == "" {
+				m.statusLine = "PAT not saved"
+				return nil
+			}
+			if err := m.repo.SaveAppState(appStateClickUpToken, token); err != nil {
+				m.statusLine = "Failed to save PAT"
+				return nil
+			}
+			if m.sync.SetProviderToken("clickup", token) {
+				m.clickUpConnected = true
+				m.statusLine = "ClickUp PAT saved"
+				return m.loadDataCmd()
+			}
+			m.statusLine = "Failed to set PAT on provider"
+			return nil
+		case tea.KeyBackspace, tea.KeyDelete:
+			if len(m.patInput) > 0 {
+				m.patInput = m.patInput[:len(m.patInput)-1]
 			}
 			return nil
-		case "k":
-			if m.controlSelected > 0 {
-				m.controlSelected--
+		default:
+			if len(msg.Runes) > 0 {
+				m.patInput += string(msg.Runes)
 			}
 			return nil
 		}
@@ -153,6 +147,9 @@ func (m *RootModel) syncControlModeByPrefix() {
 	case string(ControlModeAttachment):
 		m.controlMode = ControlModeAttachment
 		m.controlInput = strings.TrimSpace(trimmed[1:])
+	case string(ControlModePAT):
+		m.controlMode = ControlModePAT
+		m.controlInput = ""
 	}
 }
 
@@ -166,6 +163,8 @@ func (m *RootModel) refreshControlResults() {
 		m.controlResults = m.buildHelpResults(m.controlInput)
 	case ControlModeAttachment:
 		m.controlResults = m.buildAttachmentResults(m.controlInput)
+	case ControlModePAT:
+		m.controlResults = m.buildCommandResults(m.controlInput)
 	default:
 		m.controlResults = m.buildCommandResults(m.controlInput)
 	}
@@ -186,6 +185,19 @@ func (m RootModel) renderControlCenter(width int) string {
 	prefix := string(m.controlMode)
 	if prefix == "" {
 		prefix = ">"
+	}
+
+	if m.controlMode == ControlModePAT {
+		header := fmt.Sprintf("%s %s", prefix, m.patInput)
+		lines := []string{
+			ControlCenterTitleStyle.Render(components.Truncate("Enter ClickUp Personal Access Token", panelWidth-2, "...")),
+			"",
+			header,
+			"",
+			HelpStyle.Render("Press Enter to save, Esc to cancel"),
+		}
+		body := strings.Join(lines, "\n")
+		return ControlCenterPanelStyle.Width(panelWidth).Render(body)
 	}
 
 	header := fmt.Sprintf("%s %s", prefix, m.controlInput)
@@ -235,46 +247,6 @@ func (m RootModel) renderControlCenter(width int) string {
 	return ControlCenterPanelStyle.Width(panelWidth).Render(body)
 }
 
-func (m RootModel) renderRestorePrompt(width int) string {
-	panelWidth := min(max(width-4, 44), 100)
-	lines := []string{ControlCenterTitleStyle.Render(components.Truncate("Restore previous session?", panelWidth-2, "...")), ""}
-	for i, option := range restorePromptOptions() {
-		prefix := "  "
-		style := lipgloss.NewStyle()
-		if i == m.restorePromptSelected {
-			prefix = "> "
-			style = ControlCenterSelectStyle
-		}
-		line := fmt.Sprintf("%s [%s]", option.Label, option.Shortcut)
-		lines = append(lines, style.Render(components.Truncate(prefix+line, panelWidth-2, "...")))
-	}
-	lines = append(lines, "", HelpStyle.Render("Use arrows + Enter"))
-	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
-}
-
-func (m *RootModel) applyRestorePromptAction(action string) tea.Cmd {
-	m.restorePrompt = false
-	switch action {
-	case "restore":
-		m.applySessionSnapshot(m.restoreSnapshot)
-		m.statusLine = "Session restored"
-		return m.loadDataCmd()
-	case "always":
-		m.restorePolicy = RestorePolicyAlways
-		m.saveRestorePolicy()
-		m.statusLine = "Restore policy set to always"
-		return nil
-	case "never":
-		m.restorePolicy = RestorePolicyNever
-		m.saveRestorePolicy()
-		m.statusLine = "Restore policy set to never"
-		return nil
-	default:
-		m.statusLine = "Started with a fresh session"
-		return nil
-	}
-}
-
 func (m *RootModel) buildCommandResults(query string) []controlResult {
 	commands := m.controlCommands()
 	query = strings.TrimSpace(strings.ToLower(query))
@@ -285,9 +257,6 @@ func (m *RootModel) buildCommandResults(query string) []controlResult {
 	}
 	rankedItems := make([]ranked, 0, len(commands))
 	for _, cmd := range commands {
-		if cmd.VimAdvanced && !m.vimMode {
-			continue
-		}
 		score := m.commandMatchScore(cmd, query)
 		if query != "" && score <= 0 {
 			continue
@@ -350,12 +319,32 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 	items := []controlResult{
 		{Kind: "help", Title: "> Run commands", Subtitle: "Actions, toggles, settings", Badge: "mode", Shortcut: ">"},
 		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode", Shortcut: "@"},
-		{Kind: "help", Title: "# Search tasks", Subtitle: "Open task detail quickly", Badge: "mode", Shortcut: "#"},
+		{Kind: "help", Title: "/ Search tasks", Subtitle: "Open task detail quickly", Badge: "mode", Shortcut: "/"},
 		{Kind: "help", Title: "! Search attachments", Subtitle: "Open attachments for current task", Badge: "mode", Shortcut: "!"},
 		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode", Shortcut: "?"},
-		{Kind: "help", Title: "provider commands", Subtitle: "Switch provider and connect OAuth", Badge: "provider"},
 		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys", Shortcut: ":"},
-		{Kind: "help", Title: "r n a v", Subtitle: "Session restore prompt choices", Badge: "restore"},
+		{Kind: "help", Title: "arrows", Subtitle: "Move cursor", Badge: "keys"},
+		{Kind: "help", Title: "home / end", Subtitle: "Jump to top/bottom", Badge: "keys"},
+		{Kind: "help", Title: "tab / shift+tab", Subtitle: "Cycle active pane", Badge: "keys"},
+		{Kind: "help", Title: "q / ctrl+c", Subtitle: "Quit", Badge: "keys"},
+		{Kind: "help", Title: "i", Subtitle: "Edit selected task", Badge: "keys"},
+		{Kind: "help", Title: "c", Subtitle: "Add comment to selected task", Badge: "keys"},
+		{Kind: "help", Title: "f / F", Subtitle: "Cycle status filter", Badge: "keys"},
+		{Kind: "help", Title: "r", Subtitle: "Refresh data from cache", Badge: "keys"},
+		{Kind: "help", Title: "s", Subtitle: "Sync with provider", Badge: "keys"},
+		{Kind: "help", Title: "R", Subtitle: "Refresh selected task from provider", Badge: "keys"},
+		{Kind: "help", Title: "*", Subtitle: "Toggle favorite for selected list", Badge: "keys"},
+		{Kind: "help", Title: "o", Subtitle: "Toggle list sort mode", Badge: "keys"},
+		{Kind: "help", Title: "O", Subtitle: "Cycle task sort mode", Badge: "keys"},
+		{Kind: "help", Title: "ctrl+o", Subtitle: "Toggle task sort direction", Badge: "keys"},
+		{Kind: "help", Title: "g", Subtitle: "Cycle task group mode", Badge: "keys"},
+		{Kind: "help", Title: "G", Subtitle: "Cycle subtask mode", Badge: "keys"},
+		{Kind: "help", Title: "X", Subtitle: "Collapse all groups", Badge: "keys"},
+		{Kind: "help", Title: "v", Subtitle: "Toggle favorites-only lists", Badge: "keys"},
+		{Kind: "help", Title: "m", Subtitle: "Toggle Me Mode", Badge: "keys"},
+		{Kind: "help", Title: "a", Subtitle: "Download all attachments", Badge: "keys"},
+		{Kind: "help", Title: "A", Subtitle: "Download and open attachments", Badge: "keys"},
+		{Kind: "help", Title: "ctrl+shift+c", Subtitle: "Copy task link", Badge: "keys"},
 	}
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
@@ -557,21 +546,6 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.statusLine = "List favorite updated"
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
-	case "restore_policy_ask":
-		m.restorePolicy = RestorePolicyAsk
-		m.saveRestorePolicy()
-		m.statusLine = "Restore policy set to ask"
-		return nil
-	case "restore_policy_always":
-		m.restorePolicy = RestorePolicyAlways
-		m.saveRestorePolicy()
-		m.statusLine = "Restore policy set to always"
-		return nil
-	case "restore_policy_never":
-		m.restorePolicy = RestorePolicyNever
-		m.saveRestorePolicy()
-		m.statusLine = "Restore policy set to never"
-		return nil
 	case "restore_now":
 		if m.hasRestoreState {
 			m.applySessionSnapshot(m.restoreSnapshot)
@@ -585,12 +559,6 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.clearSessionSnapshot()
 		m.statusLine = "Session snapshot cleared"
 		return nil
-	case "toggle_vim_mode":
-		m.vimMode = !m.vimMode
-		m.statusLine = fmt.Sprintf("Vim mode: %t", m.vimMode)
-		m.saveTaskPrefs()
-		m.persistSessionSnapshot()
-		return nil
 	case "toggle_kitty_graphics":
 		m.kittyGraphicsEnabled = !m.kittyGraphicsEnabled
 		m.statusLine = fmt.Sprintf("Kitty Graphics: %t", m.kittyGraphicsEnabled)
@@ -599,12 +567,9 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	case "provider_next":
 		return m.switchToNextProviderCmd()
-	case "connect_clickup_oauth":
-		return m.startClickUpOAuthCmd()
-	case "vim_top":
-		cmd := m.handleMoveToTop()
-		m.statusLine = "Moved to top"
-		return cmd
+	case "set_clickup_pat":
+		m.openControlCenter(ControlModePAT)
+		return nil
 	default:
 		if strings.HasPrefix(id, "provider_switch:") {
 			providerID := strings.TrimPrefix(id, "provider_switch:")
@@ -623,7 +588,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}, Shortcut: "r"},
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}, Shortcut: "s"},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},
-		{ID: "connect_clickup_oauth", Title: "Connect ClickUp (OAuth)", Subtitle: "Authorize and save ClickUp token", Badge: "oauth", Aliases: []string{"clickup oauth", "connect clickup"}},
+		{ID: "set_clickup_pat", Title: "Set ClickUp Personal Access Token", Subtitle: "Set and save your ClickUp PAT", Badge: "provider", Aliases: []string{"clickup pat", "set clickup token"}},
 		{ID: "toggle_me_mode", Title: "Toggle Me Mode", Subtitle: "Filter tasks by current user", Badge: "toggle", Aliases: []string{"me mode", "only me"}, Shortcut: m.keymap.MeMode},
 		{ID: "toggle_favorites_only", Title: "Toggle favorites-only", Subtitle: "Filter sidebar lists by favorite", Badge: "toggle", Aliases: []string{"fav only", "favorites"}, Shortcut: m.keymap.FavOnly},
 		{ID: "toggle_list_sort", Title: "Toggle list sort", Subtitle: "Switch name/recent sorting", Badge: "toggle", Aliases: []string{"list sort", "sort lists"}, Shortcut: m.keymap.SortLists},
@@ -634,14 +599,9 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "open_attachments", Title: "Open attachments...", Subtitle: "Choose an attachment to open", Badge: "file", Aliases: []string{"attachments", "files"}, Shortcut: "A"},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
 		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}, Shortcut: m.keymap.Favorite},
-		{ID: "restore_policy_ask", Title: "Set restore policy: ask", Subtitle: "Prompt on startup", Badge: "restore", Aliases: []string{"restore ask"}},
-		{ID: "restore_policy_always", Title: "Set restore policy: always", Subtitle: "Auto-restore on startup", Badge: "restore", Aliases: []string{"restore always"}},
-		{ID: "restore_policy_never", Title: "Set restore policy: never", Subtitle: "Always start fresh", Badge: "restore", Aliases: []string{"restore never"}},
 		{ID: "restore_now", Title: "Restore last session now", Subtitle: "Apply last saved snapshot", Badge: "restore", Aliases: []string{"restore now"}},
 		{ID: "start_fresh", Title: "Start fresh now", Subtitle: "Clear saved session snapshot", Badge: "restore", Aliases: []string{"fresh", "clear session"}},
-		{ID: "toggle_vim_mode", Title: "Toggle vim mode", Subtitle: "Enable advanced vim-like controls", Badge: "config", Aliases: []string{"vim", "vim mode"}},
 		{ID: "toggle_kitty_graphics", Title: "Toggle Kitty Graphics", Subtitle: "Enable/disable terminal image display (Kitty only)", Badge: "experimental", Aliases: []string{"kitty", "images", "graphics"}},
-		{ID: "vim_top", Title: "Vim: jump to top", Subtitle: "Move cursor to top in active pane", Badge: "vim", Aliases: []string{"gg"}, VimAdvanced: true, Shortcut: "gg"},
 	}
 	for _, p := range m.availableProviders {
 		title := "Use provider: " + p.DisplayName
@@ -685,13 +645,6 @@ func (m *RootModel) recordCommand(commandID string) {
 	m.saveCommandStats()
 }
 
-func (m *RootModel) saveRestorePolicy() {
-	if m.repo == nil {
-		return
-	}
-	_ = m.repo.SaveAppState(appStateRestorePolicy, string(m.restorePolicy))
-}
-
 func (m *RootModel) saveTaskPrefs() {
 	if m.repo == nil {
 		return
@@ -703,9 +656,7 @@ func (m *RootModel) saveTaskPrefs() {
 	_ = m.repo.SaveAppState(appStateStatusFilter, m.statusFilter)
 	_ = m.repo.SaveAppState(appStateTaskSearchQuery, m.searchQuery)
 	_ = m.repo.SaveAppState(appStateMeMode, fmt.Sprintf("%t", m.meMode))
-	_ = m.repo.SaveAppState(appStateVimModeEnabled, fmt.Sprintf("%t", m.vimMode))
 	_ = m.repo.SaveAppState(appStateKittyGraphicsEnabled, fmt.Sprintf("%t", m.kittyGraphicsEnabled))
-	_ = m.repo.SaveAppState(appStateRestorePolicy, string(m.restorePolicy))
 }
 
 func (m *RootModel) saveCommandStats() {
@@ -745,7 +696,6 @@ func (m *RootModel) applySessionSnapshot(snapshot uiSessionSnapshot) {
 	m.statusFilter = snapshot.StatusFilter
 	m.searchQuery = snapshot.TaskSearchQuery
 	m.meMode = snapshot.MeMode
-	m.vimMode = snapshot.VimMode
 	if m.activePane < 0 || m.activePane > 2 {
 		m.activePane = 0
 	}
@@ -766,7 +716,6 @@ func (m *RootModel) currentSnapshot() uiSessionSnapshot {
 		StatusFilter:    m.statusFilter,
 		TaskSearchQuery: m.searchQuery,
 		MeMode:          m.meMode,
-		VimMode:         m.vimMode,
 	}
 }
 

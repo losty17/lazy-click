@@ -36,7 +36,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 			_ = engine.Run(ctx)
 		}(syncer)
 	}
-	p := tea.NewProgram(r.model, tea.WithAltScreen())
+	p := tea.NewProgram(&r.model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }

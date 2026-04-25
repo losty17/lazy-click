@@ -14,7 +14,6 @@ import (
 
 	"lazy-click/internal/cache"
 	"lazy-click/internal/provider"
-	"lazy-click/internal/provider/clickup"
 	syncengine "lazy-click/internal/sync"
 	"lazy-click/internal/tui/components"
 	"lazy-click/internal/attachment"
@@ -35,13 +34,11 @@ const (
 	appStateTaskSubtasksMode = "ui.task_subtasks_mode"
 	appStateStatusFilter     = "ui.status_filter"
 	appStateTaskSearchQuery  = "ui.task_search_query"
-	appStateVimModeEnabled   = "ui.vim_mode.enabled"
-	appStateRestorePolicy    = "ui.restore.policy"
 	appStateRestoreSession   = "ui.restore.last_session"
 	appStateRecentCommands   = "ui.control_center.recent_commands"
 	appStateCommandUsage     = "ui.control_center.command_usage"
 	appStateActiveProviderID = "ui.active_provider_id"
-	appStateClickUpToken     = "provider.clickup.oauth_token"
+	appStateClickUpToken     = "provider.clickup.pat"
 	appStateMeMode           = "ui.me_mode"
 	appStateKittyGraphicsEnabled = "ui.kitty_graphics.enabled"
 
@@ -49,22 +46,15 @@ const (
 	searchDebounceDelay = 250 * time.Millisecond
 )
 
-type RestorePolicy string
-
-const (
-	RestorePolicyAsk    RestorePolicy = "ask"
-	RestorePolicyAlways RestorePolicy = "always"
-	RestorePolicyNever  RestorePolicy = "never"
-)
-
 type ControlMode string
 
 const (
-	ControlModeCommand ControlMode = ">"
-	ControlModeList    ControlMode = "@"
-	ControlModeTask    ControlMode = "#"
-	ControlModeHelp    ControlMode = "?"
+	ControlModeCommand    ControlMode = ">"
+	ControlModeList       ControlMode = "@"
+	ControlModeTask       ControlMode = "/"
+	ControlModeHelp       ControlMode = "?"
 	ControlModeAttachment ControlMode = "!"
+	ControlModePAT        ControlMode = "$"
 )
 
 type controlResult struct {
@@ -99,7 +89,6 @@ type uiSessionSnapshot struct {
 	StatusFilter    string             `json:"status_filter"`
 	TaskSearchQuery string             `json:"task_search_query"`
 	MeMode          bool               `json:"me_mode"`
-	VimMode         bool               `json:"vim_mode"`
 }
 
 type TaskSortMode string
@@ -161,8 +150,6 @@ type RootModel struct {
 	provider            string
 	activeProviderID    string
 	availableProviders  []syncengine.ProviderMeta
-	clickUpClientID     string
-	oauthBackendURL     string
 	clickUpConnected    bool
 	providerSetupPrompt bool
 	providerSetupIndex  int
@@ -184,24 +171,15 @@ type RootModel struct {
 	kittyGraphicsEnabled bool
 
 	statusFilter string
-	searchMode   bool
-	searchInput  string
 	searchQuery  string
-	searchBackup string
-	searchReqToken int64
 
 	listSearchQuery       string
 	listSortMode          cache.ListSortMode
 	favoritesOnly         bool
 	stateHydrated         bool
 	selectedListID        string
-	restorePolicy         RestorePolicy
-	restorePrompt         bool
-	restorePromptSelected int
 	restoreSnapshot       uiSessionSnapshot
 	hasRestoreState       bool
-	restorePromptSeen     bool
-	vimMode               bool
 
 	controlOpen     bool
 	controlMode     ControlMode
@@ -211,6 +189,7 @@ type RootModel struct {
 	recentCommands  []string
 	commandUsage    map[string]commandUsageStat
 	loadedTasks     []cache.TaskEntity
+	patInput        string
 
 	commentMode    bool
 	commentInput   string
@@ -249,10 +228,8 @@ type dataLoadedMsg struct {
 	restoredStatus         string
 	restoredTaskSearch     string
 	restoredMeMode         bool
-	restoredVimMode        bool
 	restoredKittyGraphics  bool
 	restoredActiveProvider string
-	restorePolicy          RestorePolicy
 	hasRestoreSnapshot     bool
 	restoreSnapshot        uiSessionSnapshot
 	recentCommands         []string
@@ -278,23 +255,13 @@ type kittyUploadResultMsg struct {
 	id  uint32
 	err error
 }
-type oauthResultMsg struct {
-	providerID string
-	token      string
-	err        error
-}
-type pollTickMsg struct{}
 type syncTickMsg struct{}
-
-type searchDebounceMsg struct {
-	Query string
-	Token int64
-}
 
 type detailRevalidateTickMsg struct {
 	TaskID string
 	Token  int64
 }
+
 
 type detailRevalidateResultMsg struct {
 	TaskID string
@@ -312,7 +279,7 @@ type userLoadedMsg struct {
 	err  error
 }
 
-func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachment.Manager, providerName string, statusLine string, clickUpClientID string, oauthBackendURL string, clickUpConnected bool, needsProviderSetup bool) RootModel {
+func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachment.Manager, providerName string, statusLine string, clickUpConnected bool, needsProviderSetup bool) RootModel {
 	if providerName == "" {
 		providerName = "none"
 	}
@@ -334,8 +301,6 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 		provider:            providerName,
 		activeProviderID:    activeProviderID,
 		availableProviders:  availableProviders,
-		clickUpClientID:     clickUpClientID,
-		oauthBackendURL:     oauthBackendURL,
 		clickUpConnected:    clickUpConnected,
 		providerSetupPrompt: needsProviderSetup,
 		providerSetupIndex:  0,
@@ -350,7 +315,6 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 		taskGroupMode:       TaskGroupNone,
 		taskSubtasks:        TaskSubtaskFlat,
 		favoritesOnly:       false,
-		restorePolicy:       RestorePolicyAsk,
 		controlMode:         ControlModeCommand,
 		commandUsage:        make(map[string]commandUsageStat),
 		kittyImageIDs:       make(map[string]uint32),
@@ -360,10 +324,10 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 }
 
 func (m RootModel) Init() tea.Cmd {
-	return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd(), m.pollCmd())
+	return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd())
 }
 
-func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -403,52 +367,41 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.providerNeedsConnectionOverlay() {
 			switch msg.Type {
-			case tea.KeyEnter:
-				m.statusLine = "Starting ClickUp OAuth..."
-				return m, m.startClickUpOAuthCmd()
-			}
-			switch msg.String() {
-			case "q", "ctrl+c":
-				m.persistSessionSnapshot()
-				return m, tea.Quit
-			}
-			return m, nil
-		}
-
-		if m.restorePrompt {
-			switch msg.Type {
-			case tea.KeyUp:
-				if m.restorePromptSelected > 0 {
-					m.restorePromptSelected--
-				}
-				return m, nil
-			case tea.KeyDown:
-				if m.restorePromptSelected+1 < len(restorePromptOptions()) {
-					m.restorePromptSelected++
+			case tea.KeyEsc:
+				m.patInput = ""
+				m.statusLine = "PAT entry canceled, switching to local provider"
+				if m.switchProvider("local") {
+					return m, m.loadDataCmd()
 				}
 				return m, nil
 			case tea.KeyEnter:
-				options := restorePromptOptions()
-				if len(options) == 0 {
+				token := strings.TrimSpace(m.patInput)
+				if token == "" {
+					m.statusLine = "PAT not saved"
 					return m, nil
 				}
-				if m.restorePromptSelected < 0 || m.restorePromptSelected >= len(options) {
-					m.restorePromptSelected = 0
+				if err := m.repo.SaveAppState(appStateClickUpToken, token); err != nil {
+					m.statusLine = "Failed to save PAT"
+					return m, nil
 				}
-				return m, m.applyRestorePromptAction(options[m.restorePromptSelected].Action)
+				if m.sync.SetProviderToken("clickup", token) {
+					m.clickUpConnected = true
+					m.statusLine = "ClickUp PAT saved"
+					return m, tea.Batch(m.loadDataCmd(), m.syncNowCmd())
+				}
+				m.statusLine = "Failed to set PAT on provider"
+				return m, nil
+			case tea.KeyBackspace, tea.KeyDelete:
+				if len(m.patInput) > 0 {
+					m.patInput = m.patInput[:len(m.patInput)-1]
+				}
+				return m, nil
+			default:
+				if len(msg.Runes) > 0 {
+					m.patInput += string(msg.Runes)
+				}
+				return m, nil
 			}
-
-			switch msg.String() {
-			case "r", "R":
-				return m, m.applyRestorePromptAction("restore")
-			case "n", "N", "esc":
-				return m, m.applyRestorePromptAction("fresh")
-			case "a", "A":
-				return m, m.applyRestorePromptAction("always")
-			case "v", "V":
-				return m, m.applyRestorePromptAction("never")
-			}
-			return m, nil
 		}
 
 		if m.controlOpen {
@@ -478,79 +431,28 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.commentMode {
-			switch msg.Type {
-			case tea.KeyEsc:
-				m.commentMode = false
-				m.commentInput = ""
-				m.commentTaskID = ""
-				m.statusLine = "Comment canceled"
-			case tea.KeyEnter:
-				return m, m.submitCommentCmd()
-			case tea.KeyBackspace, tea.KeyDelete:
-				r := []rune(m.commentInput)
-				if len(r) > 0 {
-					m.commentInput = string(r[:len(r)-1])
+		if msg.Type == tea.KeyEnter && m.activePane == 0 {
+			newListID := m.selectedListIDFromSidebar()
+			if newListID != "" && newListID != m.selectedListID {
+				m.selectedListID = newListID
+				m.selectedTaskID = ""
+				m.displayedTaskID = ""
+				m.taskTable.SetDisplayedTaskID("")
+				m.detailLoading = false
+				m.detailLoadingMsg = ""
+				m.markListOpened(newListID)
+				m.persistLastOpenedList(newListID)
+				if m.sync != nil {
+					m.sync.SetActiveListID(newListID)
 				}
-			default:
-				if len(msg.Runes) > 0 {
-					m.commentInput += string(msg.Runes)
-				}
-			}
-			return m, nil
-		}
-
-		if m.searchMode {
-			switch msg.Type {
-			case tea.KeyEsc:
-				m.searchMode = false
-				m.searchInput = ""
-				m.searchQuery = m.searchBackup
-				m.saveTaskPrefs()
 				return m, m.loadDataCmd()
-			case tea.KeyEnter:
-				m.searchMode = false
-				m.searchQuery = strings.TrimSpace(m.searchInput)
-				m.searchInput = ""
-				if m.searchQuery == "" {
-					m.statusLine = "Task search cleared"
-				} else {
-					m.statusLine = "Task search: " + m.searchQuery
-				}
-				m.saveTaskPrefs()
-				m.persistSessionSnapshot()
-				return m, m.loadDataCmd()
-			case tea.KeyBackspace, tea.KeyDelete:
-				r := []rune(m.searchInput)
-				if len(r) > 0 {
-					m.searchInput = string(r[:len(r)-1])
-				}
-			default:
-				if len(msg.Runes) > 0 {
-					m.searchInput += string(msg.Runes)
-				}
+			} else if !m.syncing {
+				m.syncing = true
+				m.syncFrame = 0
+				m.statusLine = "Sync in progress..."
+				m.syncDetail = "starting manual sync for list"
+				return m, tea.Batch(m.syncNowCmd(), m.syncTickCmd())
 			}
-			m.searchQuery = strings.TrimSpace(m.searchInput)
-			m.saveTaskPrefs()
-			m.searchReqToken++
-			token := m.searchReqToken
-			query := m.searchQuery
-			return m, tea.Tick(searchDebounceDelay, func(t time.Time) tea.Msg {
-				return searchDebounceMsg{Query: query, Token: token}
-			})
-		}
-
-		prevListID := m.selectedListID
-		if msg.Type == tea.KeyEnter && m.activePane == 2 {
-			url := m.currentTaskBrowserURL()
-			if strings.TrimSpace(url) == "" {
-				m.statusLine = "No browser URL available for selected task"
-				return m, nil
-			}
-			m.openTaskPrompt = true
-			m.openTaskURL = url
-			m.statusLine = "Open task in browser? Press Enter/Y to confirm or N/Esc to cancel"
-			return m, nil
 		}
 
 		if msg.Type == tea.KeyEnter && m.activePane == 1 {
@@ -577,33 +479,41 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ":":
 			m.openControlCenter(ControlModeCommand)
 			return m, nil
-		case "?":
-			m.openControlCenter(ControlModeHelp)
+		case "$":
+			m.openControlCenter(ControlModePAT)
 			return m, nil
 		case "home":
-			return m, m.handleMoveToTop()
+			return m.handleMoveToTop()
 		case "end":
-			return m, m.handleMoveToBottom()
+			return m.handleMoveToBottom()
 		case "tab":
 			m.activePane = (m.activePane + 1) % 3
 		case "shift+tab", "backtab":
 			m.activePane = (m.activePane + 2) % 3
 		case m.keymap.Down, "down":
-			return m, m.handleMove(1)
+			switch m.activePane {
+			case 0:
+				m.sidebar.Move(1)
+			case 1:
+				m.taskTable.Move(1)
+			case 2:
+				return m.detailPanelMove(1)
+			}
+			return m, nil
 		case m.keymap.Up, "up":
-			return m, m.handleMove(-1)
+			switch m.activePane {
+			case 0:
+				m.sidebar.Move(-1)
+			case 1:
+				m.taskTable.Move(-1)
+			case 2:
+				return m.detailPanelMove(-1)
+			}
+			return m, nil
 		case "h", "left":
-			return m, m.handleHorizontalMove(-2)
+			return m.handleHorizontalMove(-2)
 		case "l", "right":
-			return m, m.handleHorizontalMove(2)
-		case "ctrl+d":
-			if m.vimMode {
-				return m, m.handleMove(10)
-			}
-		case "ctrl+u":
-			if m.vimMode {
-				return m, m.handleMove(-10)
-			}
+			return m.handleHorizontalMove(2)
 		case "r":
 			return m, m.loadDataCmd()
 		case "s":
@@ -644,9 +554,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saveTaskPrefs()
 			return m, m.loadDataCmd()
 		case m.keymap.Search:
-			m.searchMode = true
-			m.searchInput = m.searchQuery
-			m.searchBackup = m.searchQuery
+			m.openControlCenter(ControlModeTask)
 			return m, nil
 		case m.keymap.TaskTitle:
 			if m.activePane == 1 {
@@ -733,24 +641,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.activePane == 0 {
-			newListID := m.selectedListIDFromSidebar()
-			if newListID != "" && newListID != prevListID {
-				m.selectedListID = newListID
-				m.selectedTaskID = ""
-				m.displayedTaskID = ""
-				m.taskTable.SetDisplayedTaskID("")
-				m.detailLoading = false
-				m.detailLoadingMsg = ""
-				m.markListOpened(newListID)
-				m.persistLastOpenedList(newListID)
-				if m.sync != nil {
-					m.sync.SetActiveListID(newListID)
-				}
-				return m, m.loadDataCmd()
-			}
-		}
-
 	case userLoadedMsg:
 		if msg.err == nil {
 			m.currentUser = msg.user
@@ -789,7 +679,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusFilter = msg.restoredStatus
 			m.searchQuery = msg.restoredTaskSearch
 			m.meMode = msg.restoredMeMode
-			m.vimMode = msg.restoredVimMode
 			m.kittyGraphicsEnabled = msg.restoredKittyGraphics
 			if msg.restoredActiveProvider != "" && m.sync != nil {
 				if m.sync.SetActiveProvider(msg.restoredActiveProvider) {
@@ -797,20 +686,14 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.provider = m.sync.ProviderDisplayName()
 				}
 			}
-			if msg.restorePolicy != "" {
-				m.restorePolicy = msg.restorePolicy
-			}
 			m.restoreSnapshot = msg.restoreSnapshot
 			m.hasRestoreState = msg.hasRestoreSnapshot
 			m.recentCommands = append([]string(nil), msg.recentCommands...)
 			if msg.commandUsage != nil {
 				m.commandUsage = msg.commandUsage
 			}
-			if m.restorePolicy == RestorePolicyAlways && m.hasRestoreState {
+			if m.hasRestoreState {
 				m.applySessionSnapshot(m.restoreSnapshot)
-			} else if m.restorePolicy == RestorePolicyAsk && m.hasRestoreState {
-				m.restorePrompt = true
-				m.restorePromptSelected = 0
 			}
 		}
 
@@ -843,6 +726,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetSelectedIndex(selectedIdx)
 
 		m.taskTable.SetRows(mapTasksToRows(msg.tasks, m.taskGroupMode, m.taskSubtasks))
+		m.taskTable.NoTasksMessage = ""
 		m.loadedTasks = append([]cache.TaskEntity(nil), msg.tasks...)
 		if m.displayedTaskID != "" {
 			if _, ok := m.taskTable.RowByID(m.displayedTaskID); !ok {
@@ -860,6 +744,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.refreshDetail(m.detailLoading && m.detailReqTaskID == m.displayedTaskID, m.detailLoadingMsg)
 		if len(msg.lists) == 0 {
 			m.statusLine = "No lists in cache yet. Press 's' to sync now."
+		} else if len(msg.tasks) == 0 {
+			m.taskTable.NoTasksMessage = "No tasks for this list in cache. Press Enter to fetch."
 		} else if m.statusLine == "" {
 			m.statusLine = "Loaded from local cache"
 		}
@@ -983,36 +869,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case oauthResultMsg:
-		if msg.err != nil {
-			m.statusLine = "OAuth failed: " + msg.err.Error()
-			return m, nil
-		}
-		if m.repo != nil {
-			_ = m.repo.SaveAppState(appStateClickUpToken, msg.token)
-		}
-		if m.sync != nil {
-			if !m.sync.SetProviderToken(msg.providerID, msg.token) {
-				m.statusLine = "OAuth completed but provider token update failed"
-				return m, nil
-			}
-			m.availableProviders = m.sync.Providers()
-		}
-		if msg.providerID == "clickup" {
-			m.clickUpConnected = true
-		}
-		m.statusLine = "ClickUp connected successfully"
-		return m, m.loadDataCmd()
-
-	case pollTickMsg:
-		return m, tea.Batch(m.loadDataCmd(), m.pollCmd())
-
-	case searchDebounceMsg:
-		if msg.Token != m.searchReqToken {
-			return m, nil
-		}
-		return m, m.loadDataCmd()
-
 	case syncTickMsg:
 		if !m.syncing {
 			return m, nil
@@ -1027,25 +883,13 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *RootModel) handleMove(delta int) tea.Cmd {
-	switch m.activePane {
-	case 0:
-		m.sidebar.Move(delta)
-	case 1:
-		m.taskTable.Move(delta)
-	case 2:
-		return m.detailPanelMove(delta)
-	}
-	return nil
-}
-
-func (m *RootModel) detailPanelMove(delta int) tea.Cmd {
+func (m *RootModel) detailPanelMove(delta int) (tea.Model, tea.Cmd) {
 	m.detailPanel.Move(delta)
 	// Movement in detail pane might reveal/hide images, so we need to refresh to trigger uploads if needed
-	return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+	return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 }
 
-func (m *RootModel) handleHorizontalMove(delta int) tea.Cmd {
+func (m *RootModel) handleHorizontalMove(delta int) (tea.Model, tea.Cmd) {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveHorizontal(delta)
@@ -1054,15 +898,15 @@ func (m *RootModel) handleHorizontalMove(delta int) tea.Cmd {
 	case 2:
 		return m.detailPanelMoveHorizontal(delta)
 	}
-	return nil
+	return m, nil
 }
 
-func (m *RootModel) detailPanelMoveHorizontal(delta int) tea.Cmd {
+func (m *RootModel) detailPanelMoveHorizontal(delta int) (tea.Model, tea.Cmd) {
 	m.detailPanel.MoveHorizontal(delta)
-	return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+	return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 }
 
-func (m *RootModel) handleMoveToTop() tea.Cmd {
+func (m *RootModel) handleMoveToTop() (tea.Model, tea.Cmd) {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveToTop()
@@ -1070,12 +914,12 @@ func (m *RootModel) handleMoveToTop() tea.Cmd {
 		m.taskTable.MoveToTop()
 	case 2:
 		m.detailPanel.MoveToTop()
-		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+		return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
-	return nil
+	return m, nil
 }
 
-func (m *RootModel) handleMoveToBottom() tea.Cmd {
+func (m *RootModel) handleMoveToBottom() (tea.Model, tea.Cmd) {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveToBottom()
@@ -1083,14 +927,18 @@ func (m *RootModel) handleMoveToBottom() tea.Cmd {
 		m.taskTable.MoveToBottom()
 	case 2:
 		m.detailPanel.MoveToBottom()
-		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+		return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
-	return nil
+	return m, nil
 }
 
 func (m RootModel) View() string {
 	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
-	header := HeaderStyle.Width(totalWidth).Render(components.Truncate("lazy-click", totalWidth, "..."))
+
+	title := HeaderStyle.Render(fmt.Sprintf("lazy-click [%s]", m.provider))
+	syncLine := m.syncProgressLine(totalWidth)
+	header := lipgloss.JoinHorizontal(lipgloss.Top, title, lipgloss.NewStyle().Width(totalWidth-lipgloss.Width(title)).Align(lipgloss.Right).Render(syncLine))
+
 	const verticalPaneGap = 0
 	const horizontalPaneGap = 1
 
@@ -1137,9 +985,7 @@ func (m RootModel) View() string {
 		taskSearch = m.searchQuery
 	}
 	status := fmt.Sprintf(
-		"Provider: %s (%s) | List sort: %s | Task sort: %s (%s) | Task group: %s | Subtasks: %s | Favorites-only: %t | Me Mode: %t | Task status: %s | Task search: %s | Vim mode: %t",
-		m.provider,
-		m.activeProviderID,
+		"List sort: %s | Task sort: %s (%s) | Task group: %s | Subtasks: %s | Favorites-only: %t | Me Mode: %t | Task status: %s | Task search: %s",
 		m.listSortMode,
 		m.taskSortMode,
 		m.taskSortDirection,
@@ -1149,40 +995,15 @@ func (m RootModel) View() string {
 		m.meMode,
 		statusFilter,
 		taskSearch,
-		m.vimMode,
 	)
-
-	help := "Keys: hjkl/arrows move, home/end jump, / task search, ? list search, t show task title, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse all groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, a download attachments, A download & open, f/F status, r refresh, s sync, q quit"
-	if m.commentMode {
-		help = "Comment mode: type text, Enter submit, Esc cancel"
-	} else if m.openTaskPrompt {
-		help = "Open task prompt: Enter/Y confirm, N/Esc cancel"
-	} else if m.searchMode {
-		help = fmt.Sprintf("Task search mode: %s (type to filter, Enter apply, Esc cancel)", m.searchInput)
-	} else if m.controlOpen {
-		help = "Control center: Enter run/select, Esc close, @ lists, # tasks, ? help, > commands, provider switch commands"
-	} else if m.restorePrompt {
-		help = "Session restore: r restore, n fresh, a always, v never"
-	} else {
-		help = "Keys: ctrl+p/ctrl+k/: control center, hjkl/arrows move cursor, Enter open row, / task search, ctrl+shift+c copy task link, * favorite list, o sort lists, O sort tasks, ctrl+o sort dir, g group tasks, G subtasks mode, X collapse groups, v favorites-only, m me-mode, i edit, R refresh task, c comment, a download attachments, A download & open, f/F status, r refresh, s sync, q quit"
-	}
-
-	syncLine := m.syncProgressLine(totalWidth)
 
 	screen := strings.Join([]string{
 		header,
 		body,
 		StatusStyle.Render(components.Truncate(status, totalWidth, "...")),
 		StatusStyle.Render(components.Truncate(m.statusLine, totalWidth, "...")),
-		syncLine,
-		HelpStyle.Render(components.Truncate(help, totalWidth, "...")),
 	}, "\n")
 
-	if m.restorePrompt {
-		overlay := m.renderRestorePrompt(totalWidth)
-		y := centeredOverlayY(screen, overlay, -2)
-		screen = overlayCentered(screen, overlay, totalWidth, y)
-	}
 	if m.controlOpen {
 		overlay := m.renderControlCenter(totalWidth)
 		y := centeredOverlayY(screen, overlay, 0)
@@ -1217,14 +1038,15 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	const verticalPaneGap = 0
 	const horizontalPaneGap = 1
 
-	totalWidth := 78
+	// totalWidth := 78
+	totalWidth := hFrame
 	if m.width > 0 {
 		totalWidth = m.width - 2
 	}
 	totalWidth = max(totalWidth, 20)
 
 	totalHeight := max(totalHeightFromModel(m.height)-1, 8)
-	reserved := 6
+	reserved := 4
 	bodyOuterHeight := totalHeight - reserved
 	minBodyOuter := (2 * vFrame) + 2
 	if bodyOuterHeight < minBodyOuter {
@@ -1241,7 +1063,7 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	if sidebarInnerWidth > maxSidebar {
 		sidebarInnerWidth = maxSidebar
 	}
-	rightInnerWidth := innerWidthBudget - sidebarInnerWidth
+	rightInnerWidth := innerWidthBudget - sidebarInnerWidth + reserved
 	if rightInnerWidth < 8 {
 		rightInnerWidth = 8
 		sidebarInnerWidth = innerWidthBudget - rightInnerWidth
@@ -1374,27 +1196,11 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				}
 			}
 
-			vimMode := false
-			if vimRaw, err := m.repo.GetAppState(appStateVimModeEnabled); err != nil {
-				return dataLoadedMsg{err: err}
-			} else if vimRaw != "" {
-				if parsed, parseErr := strconv.ParseBool(vimRaw); parseErr == nil {
-					vimMode = parsed
-				}
-			}
-
 			kittyEnabled := false
 			if kittyRaw, err := m.repo.GetAppState(appStateKittyGraphicsEnabled); err == nil && kittyRaw != "" {
 				if parsed, parseErr := strconv.ParseBool(kittyRaw); parseErr == nil {
 					kittyEnabled = parsed
 				}
-			}
-
-			restorePolicy := RestorePolicyAsk
-			if policyRaw, err := m.repo.GetAppState(appStateRestorePolicy); err != nil {
-				return dataLoadedMsg{err: err}
-			} else {
-				restorePolicy = normalizeRestorePolicy(policyRaw)
 			}
 
 			hasSnapshot := false
@@ -1441,9 +1247,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoredStatus = statusFilter
 			msg.restoredTaskSearch = taskSearch
 			msg.restoredMeMode = meMode
-			msg.restoredVimMode = vimMode
 			msg.restoredKittyGraphics = kittyEnabled
-			msg.restorePolicy = restorePolicy
 			msg.hasRestoreSnapshot = hasSnapshot
 			msg.restoreSnapshot = snapshot
 			msg.recentCommands = recentCommands
@@ -1562,13 +1366,17 @@ func (m RootModel) renderProviderSetupOverlay(width int) string {
 
 func (m RootModel) renderProviderConnectOverlay(width int) string {
 	panelWidth := min(max(width-6, 52), 104)
+	meta, _ := m.activeProviderMeta()
 	lines := []string{
 		ControlCenterTitleStyle.Render(components.Truncate("Provider requires connection", panelWidth-2, "...")),
 		"",
-		components.Truncate("The active provider is not connected yet.", panelWidth-2, "..."),
-		components.Truncate("Press Enter to connect with OAuth.", panelWidth-2, "..."),
+		components.Truncate("Enter your Personal Access Token for "+meta.DisplayName, panelWidth-2, "..."),
 		"",
-		ControlCenterSelectStyle.Render(components.Truncate("> Connect ClickUp OAuth (Enter)", panelWidth-2, "...")),
+		HelpStyle.Render(meta.TokenInstructions),
+		"",
+		m.patInput,
+		"",
+		HelpStyle.Render("Press Enter to save, Esc to cancel"),
 	}
 	return RestorePromptStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
 }
@@ -2208,12 +2016,6 @@ func (m RootModel) syncProgressLine(width int) string {
 	return SyncRunStyle.Render(fmt.Sprintf("%s[%s] %s", prefix, string(cells), detail))
 }
 
-func (m RootModel) pollCmd() tea.Cmd {
-	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
-		return pollTickMsg{}
-	})
-}
-
 func (m RootModel) persistLastOpenedList(listID string) {
 	if listID == "" || m.repo == nil {
 		return
@@ -2284,27 +2086,7 @@ func (m *RootModel) switchToNextProviderCmd() tea.Cmd {
 	return nil
 }
 
-func (m RootModel) startClickUpOAuthCmd() tea.Cmd {
-	if strings.TrimSpace(m.clickUpClientID) == "" {
-		return func() tea.Msg {
-			return oauthResultMsg{providerID: "clickup", err: fmt.Errorf("CLICKUP_CLIENT_ID is required")}
-		}
-	}
-	if strings.TrimSpace(m.oauthBackendURL) == "" {
-		return func() tea.Msg {
-			return oauthResultMsg{providerID: "clickup", err: fmt.Errorf("LAZY_CLICK_OAUTH_BACKEND_URL is required")}
-		}
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
-		token, err := clickup.OAuthTokenViaBackend(ctx, clickup.BackendOAuthConfig{
-			BackendURL: m.oauthBackendURL,
-			ClientID:   m.clickUpClientID,
-		})
-		return oauthResultMsg{providerID: "clickup", token: token, err: err}
-	}
-}
+
 
 func totalHeightFromModel(height int) int {
 	if height > 0 {

@@ -9,16 +9,10 @@ import (
 	"github.com/joho/godotenv"
 )
 
-var buildDefaultClickUpClientID string
-var buildDefaultOAuthBackendURL string
-
 type Config struct {
-	DBPath              string
-	DefaultProvider     string
-	ClickUpAPIToken     string
-	ClickUpClientID     string
-	ClickUpClientSecret string
-	OAuthBackendURL     string
+	DBPath          string
+	DefaultProvider string
+	ClickUpAPIToken string
 }
 
 func Load() (Config, error) {
@@ -33,12 +27,9 @@ func Load() (Config, error) {
 	defaultProvider := os.Getenv("LAZY_CLICK_DEFAULT_PROVIDER")
 
 	return Config{
-		DBPath:              dbPath,
-		DefaultProvider:     strings.TrimSpace(defaultProvider),
-		ClickUpAPIToken:     os.Getenv("CLICKUP_API_TOKEN"),
-		ClickUpClientID:     firstNonEmpty(os.Getenv("CLICKUP_CLIENT_ID"), buildDefaultClickUpClientID),
-		ClickUpClientSecret: os.Getenv("CLICKUP_CLIENT_SECRET"),
-		OAuthBackendURL:     firstNonEmpty(os.Getenv("LAZY_CLICK_OAUTH_BACKEND_URL"), buildDefaultOAuthBackendURL),
+		DBPath:          dbPath,
+		DefaultProvider: strings.TrimSpace(defaultProvider),
+		ClickUpAPIToken: os.Getenv("CLICKUP_API_TOKEN"),
 	}, nil
 }
 

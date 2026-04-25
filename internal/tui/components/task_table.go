@@ -38,6 +38,7 @@ type TaskTableModel struct {
 	idx             int
 	x               int
 	displayedTaskID string
+	NoTasksMessage  string
 }
 
 func NewTaskTable() TaskTableModel {
@@ -288,7 +289,11 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	// Body viewport excludes title/header lines.
 	bodySize := max(height-2, 0)
 	if len(m.rows) == 0 {
-		lines = append(lines, lineWindow("  No tasks available for selected list", width, 0))
+		msg := "  No tasks available for selected list"
+		if m.NoTasksMessage != "" {
+			msg = "  " + m.NoTasksMessage
+		}
+		lines = append(lines, lineWindow(msg, width, 0))
 	}
 	start, end := VisibleWindow(len(m.rows), m.idx, bodySize)
 	for i := start; i < end; i++ {

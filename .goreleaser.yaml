@@ -13,10 +13,7 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - >-
-        -s -w
-        -X lazy-click/internal/config.buildDefaultClickUpClientID={{ index .Env "BUILD_DEFAULT_CLICKUP_CLIENT_ID" }}
-        -X lazy-click/internal/config.buildDefaultOAuthBackendURL={{ index .Env "BUILD_DEFAULT_OAUTH_BACKEND_URL" }}
+      - -s -w
     goos:
       - linux
       - darwin

@@ -89,6 +89,23 @@ func (p *Provider) GetTasks(ctx context.Context, listID string, filter provider.
 			StatusColor:   t.Status.Color,
 			CustomFields:  map[string]any{},
 		}
+		task.ListIDs = append(task.ListIDs, t.List.ID)
+		for _, l := range t.Lists {
+			task.ListIDs = append(task.ListIDs, l.ID)
+		}
+
+		// Ensure the list we are currently fetching from is included
+		found := false
+		for _, lID := range task.ListIDs {
+			if lID == listID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			task.ListIDs = append(task.ListIDs, listID)
+		}
+
 		if t.DueDate != nil {
 			if parsedDue, err := strconv.ParseInt(*t.DueDate, 10, 64); err == nil {
 				task.DueAtUnixMS = &parsedDue
@@ -160,6 +177,10 @@ func (p *Provider) GetTask(ctx context.Context, taskID string) (provider.Task, e
 		Status:        t.Status.Status,
 		StatusColor:   t.Status.Color,
 		CustomFields:  map[string]any{},
+	}
+	task.ListIDs = append(task.ListIDs, t.List.ID)
+	for _, l := range t.Lists {
+		task.ListIDs = append(task.ListIDs, l.ID)
 	}
 	if t.DueDate != nil {
 		if parsedDue, parseErr := strconv.ParseInt(*t.DueDate, 10, 64); parseErr == nil {
@@ -290,14 +311,37 @@ func decodeCommentText(raw json.RawMessage) string {
 		return plain
 	}
 
-	// Try to parse as ClickUp rich text (array of objects with "text" field)
-	var rich []struct {
-		Text string `json:"text"`
-	}
+	// Try to parse as ClickUp rich text (array of objects)
+	var rich []map[string]any
 	if err := json.Unmarshal(raw, &rich); err == nil {
 		var buf strings.Builder
 		for _, part := range rich {
-			buf.WriteString(part.Text)
+			if text, ok := part["text"].(string); ok && text != "" {
+				buf.WriteString(text)
+				continue
+			}
+
+			// Handle Mentions
+			if mention, ok := part["type"].(string); ok && mention == "mention" {
+				if user, ok := part["user"].(map[string]any); ok {
+					if username, ok := user["username"].(string); ok {
+						buf.WriteString("@" + username)
+						continue
+					}
+				}
+			}
+
+			// Handle Embeds
+			if _, ok := part["embed"]; ok {
+				buf.WriteString("[Embed]")
+				continue
+			}
+
+			// Handle Attachments
+			if _, ok := part["attachment"]; ok {
+				buf.WriteString("[Attachment]")
+				continue
+			}
 		}
 		return buf.String()
 	}
