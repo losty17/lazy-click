@@ -30,10 +30,12 @@ func (e *Engine) PullMetadataOnce(ctx context.Context) error {
 	spaceRows := make([]cache.SpaceEntity, 0, len(spaces))
 	for _, s := range spaces {
 		spaceRows = append(spaceRows, cache.SpaceEntity{
-			ID:         s.ID,
-			Provider:   e.providerKey,
-			ExternalID: s.ID,
-			Name:       s.Name,
+			ID:            s.ID,
+			Provider:      e.providerKey,
+			ExternalID:    s.ID,
+			WorkspaceID:   s.WorkspaceID,
+			WorkspaceName: s.WorkspaceName,
+			Name:          s.Name,
 		})
 	}
 	if err := e.repo.SaveSpaces(spaceRows); err != nil {

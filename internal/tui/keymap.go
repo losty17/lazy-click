@@ -25,6 +25,7 @@ type Keymap struct {
 	DeleteTask          string
 	CreateList          string
 	DeleteList          string
+	DeleteComment       string
 }
 
 func DefaultKeymap() Keymap {
@@ -53,5 +54,6 @@ func DefaultKeymap() Keymap {
 		DeleteTask:          "D",
 		CreateList:          "E",
 		DeleteList:          "L",
+		DeleteComment:       "K",
 	}
 }

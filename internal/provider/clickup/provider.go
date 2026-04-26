@@ -46,8 +46,10 @@ func (p *Provider) GetSpaces(ctx context.Context) ([]provider.Space, error) {
 	out := make([]provider.Space, 0, len(resp.Spaces))
 	for _, s := range resp.Spaces {
 		out = append(out, provider.Space{
-			ID:   s.ID.String(),
-			Name: s.Name,
+			ID:            s.ID.String(),
+			Name:          s.Name,
+			WorkspaceID:   s.TeamID,
+			WorkspaceName: s.TeamName,
 		})
 	}
 	return out, nil

@@ -6,18 +6,37 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type SidebarRowType string
+
+const (
+	SidebarRowList  SidebarRowType = "list"
+	SidebarRowGroup SidebarRowType = "group"
+)
+
+type SidebarRow struct {
+	Type        SidebarRowType
+	ID          string
+	Title       string
+	Indent      int
+	CollapseKey string
+	HiddenBy    []string
+	Collapsed   bool
+}
+
 type SidebarModel struct {
-	items []string
-	idx   int
-	x     int
+	rows      []SidebarRow
+	allRows   []SidebarRow
+	collapsed map[string]bool
+	idx       int
+	x         int
 }
 
 func NewSidebar() SidebarModel {
-	return SidebarModel{items: []string{"No lists synced yet"}}
+	return SidebarModel{collapsed: make(map[string]bool)}
 }
 
 func (m *SidebarModel) Move(delta int) {
-	if len(m.items) == 0 {
+	if len(m.rows) == 0 {
 		m.idx = 0
 		return
 	}
@@ -25,25 +44,66 @@ func (m *SidebarModel) Move(delta int) {
 	if next < 0 {
 		next = 0
 	}
-	if next >= len(m.items) {
-		next = len(m.items) - 1
+	if next >= len(m.rows) {
+		next = len(m.rows) - 1
 	}
 	m.idx = next
 }
 
-func (m *SidebarModel) SetItems(items []string) {
-	if len(items) == 0 {
-		m.items = []string{"No lists synced yet"}
+func (m *SidebarModel) SetRows(rows []SidebarRow) {
+	m.allRows = rows
+	m.applyVisibility()
+	if len(m.rows) == 0 {
 		m.idx = 0
 		return
 	}
-	m.items = items
-	if m.idx >= len(m.items) {
-		m.idx = len(m.items) - 1
+	if m.idx >= len(m.rows) {
+		m.idx = len(m.rows) - 1
 	}
 	if m.idx < 0 {
 		m.idx = 0
 	}
+}
+
+func (m *SidebarModel) applyVisibility() {
+	if m.collapsed == nil {
+		m.collapsed = make(map[string]bool)
+	}
+	visible := make([]SidebarRow, 0, len(m.allRows))
+	for _, row := range m.allRows {
+		hidden := false
+		for _, key := range row.HiddenBy {
+			if m.collapsed[key] {
+				hidden = true
+				break
+			}
+		}
+		if hidden {
+			continue
+		}
+		copyRow := row
+		if copyRow.CollapseKey != "" {
+			copyRow.Collapsed = m.collapsed[copyRow.CollapseKey]
+		}
+		visible = append(visible, copyRow)
+	}
+	m.rows = visible
+}
+
+func (m *SidebarModel) ToggleSelectedCollapse() bool {
+	row, ok := m.Selected()
+	if !ok || row.CollapseKey == "" {
+		return false
+	}
+	if m.collapsed == nil {
+		m.collapsed = make(map[string]bool)
+	}
+	m.collapsed[row.CollapseKey] = !m.collapsed[row.CollapseKey]
+	m.applyVisibility()
+	if m.idx >= len(m.rows) {
+		m.idx = max(len(m.rows)-1, 0)
+	}
+	return true
 }
 
 func (m SidebarModel) SelectedIndex() int {
@@ -51,17 +111,26 @@ func (m SidebarModel) SelectedIndex() int {
 }
 
 func (m *SidebarModel) SetSelectedIndex(idx int) {
-	if len(m.items) == 0 {
+	// Since rows can be hidden, we need to find the index in m.rows
+	// based on ID if it's a list. This is handled by the caller usually.
+	if len(m.rows) == 0 {
 		m.idx = 0
 		return
 	}
 	if idx < 0 {
 		idx = 0
 	}
-	if idx >= len(m.items) {
-		idx = len(m.items) - 1
+	if idx >= len(m.rows) {
+		idx = len(m.rows) - 1
 	}
 	m.idx = idx
+}
+
+func (m SidebarModel) Selected() (SidebarRow, bool) {
+	if len(m.rows) == 0 || m.idx < 0 || m.idx >= len(m.rows) {
+		return SidebarRow{}, false
+	}
+	return m.rows[m.idx], true
 }
 
 func (m *SidebarModel) MoveHorizontal(delta int) {
@@ -74,11 +143,11 @@ func (m *SidebarModel) MoveToTop() {
 }
 
 func (m *SidebarModel) MoveToBottom() {
-	if len(m.items) == 0 {
+	if len(m.rows) == 0 {
 		m.idx = 0
 		return
 	}
-	m.idx = len(m.items) - 1
+	m.idx = len(m.rows) - 1
 }
 
 func (m *SidebarModel) Render(active bool, width int, height int) string {
@@ -86,17 +155,17 @@ func (m *SidebarModel) Render(active bool, width int, height int) string {
 		return ""
 	}
 
-	// First line is a static header; remaining lines are list rows.
 	header := "Sidebar (Workspace > Space > List)"
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 	selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	groupStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
 	_ = active
 
-	// Clamp horizontal scroll
 	maxLineWidth := len(header)
-	for _, item := range m.items {
-		if len(item)+2 > maxLineWidth {
-			maxLineWidth = len(item) + 2
+	for _, row := range m.rows {
+		w := len(row.Title) + 6 + row.Indent
+		if w > maxLineWidth {
+			maxLineWidth = w
 		}
 	}
 	maxOffset := max(maxLineWidth-width, 0)
@@ -109,11 +178,14 @@ func (m *SidebarModel) Render(active bool, width int, height int) string {
 
 	lines := []string{headerStyle.Render(lineWindow(header, width, m.x))}
 
-	// Keep the selected item centered when possible and only render the visible slice.
+	if len(m.rows) == 0 {
+		lines = append(lines, "  No lists synced yet")
+	}
+
 	bodySize := max(height-1, 0)
-	start, end := VisibleWindow(len(m.items), m.idx, bodySize)
+	start, end := VisibleWindow(len(m.rows), m.idx, bodySize)
 	for i := start; i < end; i++ {
-		item := m.items[i]
+		row := m.rows[i]
 		prefix := "  "
 		style := lipgloss.NewStyle()
 		if i == m.idx {
@@ -121,11 +193,23 @@ func (m *SidebarModel) Render(active bool, width int, height int) string {
 			style = selectedStyle
 		}
 
-		// lineWindow applies horizontal scrolling (m.x) while preserving fixed row width.
-		lines = append(lines, style.Render(lineWindow(prefix+item, width, m.x)))
+		if row.Type == SidebarRowGroup {
+			style = groupStyle.Copy().Inherit(style)
+		}
+
+		title := row.Title
+		if row.CollapseKey != "" {
+			if row.Collapsed {
+				title = "[+] " + title
+			} else {
+				title = "[-] " + title
+			}
+		}
+
+		text := prefix + strings.Repeat(" ", row.Indent) + title
+		lines = append(lines, style.Render(lineWindow(text, width, m.x)))
 	}
 
-	// Pad to the requested height so the panel always renders as a full rectangle.
 	for len(lines) < height {
 		lines = append(lines, strings.Repeat(" ", width))
 	}

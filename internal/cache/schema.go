@@ -11,12 +11,13 @@ const (
 )
 
 type SpaceEntity struct {
-	ID          string `gorm:"primaryKey;size:128"`
-	Provider    string `gorm:"index;size:32;not null"`
-	ExternalID  string `gorm:"index;size:128;not null"`
-	WorkspaceID string `gorm:"index;size:128"`
-	Name        string `gorm:"size:256;not null"`
-	UpdatedAt   time.Time
+	ID            string `gorm:"primaryKey;size:128"`
+	Provider      string `gorm:"index;size:32;not null"`
+	ExternalID    string `gorm:"index;size:128;not null"`
+	WorkspaceID   string `gorm:"index;size:128"`
+	WorkspaceName string `gorm:"size:256"`
+	Name          string `gorm:"size:256;not null"`
+	UpdatedAt     time.Time
 }
 
 type ListEntity struct {

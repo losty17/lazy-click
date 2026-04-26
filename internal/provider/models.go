@@ -61,8 +61,10 @@ type Comment struct {
 }
 
 type Space struct {
-	ID   string
-	Name string
+	ID            string
+	Name          string
+	WorkspaceID   string
+	WorkspaceName string
 }
 
 type TaskList struct {

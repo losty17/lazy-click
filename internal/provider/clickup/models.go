@@ -66,8 +66,10 @@ type GetSpacesResponse struct {
 }
 
 type SpaceDTO struct {
-	ID   ClickUpID `json:"id"`
-	Name string    `json:"name"`
+	ID       ClickUpID `json:"id"`
+	Name     string    `json:"name"`
+	TeamID   string    `json:"-"`
+	TeamName string    `json:"-"`
 }
 
 type GetListsResponse struct {

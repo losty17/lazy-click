@@ -43,6 +43,10 @@ func (c *Client) GetSpaces(ctx context.Context) (*GetSpacesResponse, error) {
 		if err != nil {
 			return nil, err
 		}
+		for i := range teamSpaces.Spaces {
+			teamSpaces.Spaces[i].TeamID = team.ID.String()
+			teamSpaces.Spaces[i].TeamName = team.Name
+		}
 		out.Spaces = append(out.Spaces, teamSpaces.Spaces...)
 	}
 	return out, nil

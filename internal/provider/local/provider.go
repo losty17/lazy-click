@@ -31,10 +31,12 @@ func (p *Provider) ensureSeedData() error {
 		return fmt.Errorf("cache repository unavailable")
 	}
 	if err := p.repo.SaveSpaces([]cache.SpaceEntity{{
-		ID:         defaultSpaceID,
-		Provider:   ProviderType,
-		ExternalID: defaultSpaceID,
-		Name:       "Local",
+		ID:            defaultSpaceID,
+		Provider:      ProviderType,
+		ExternalID:    defaultSpaceID,
+		WorkspaceID:   "local-ws",
+		WorkspaceName: "Local Workspace",
+		Name:          "Local",
 	}}); err != nil {
 		return err
 	}
@@ -65,7 +67,12 @@ func (p *Provider) GetSpaces(ctx context.Context) ([]provider.Space, error) {
 	}
 	out := make([]provider.Space, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, provider.Space{ID: row.ID, Name: row.Name})
+		out = append(out, provider.Space{
+			ID:            row.ID,
+			Name:          row.Name,
+			WorkspaceID:   row.WorkspaceID,
+			WorkspaceName: row.WorkspaceName,
+		})
 	}
 	return out, nil
 }

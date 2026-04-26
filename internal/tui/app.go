@@ -44,6 +44,7 @@ const (
 
 	detailDebounceDelay = 3 * time.Second
 	searchDebounceDelay = 250 * time.Millisecond
+	pollInterval        = 30 * time.Second
 )
 
 type ControlMode string
@@ -51,7 +52,9 @@ type ControlMode string
 const (
 	ControlModeCommand    ControlMode = ">"
 	ControlModeList       ControlMode = "@"
+	ControlModeSpace      ControlMode = "#"
 	ControlModeTask       ControlMode = "/"
+	ControlModeComment    ControlMode = ","
 	ControlModeHelp       ControlMode = "?"
 	ControlModeAttachment ControlMode = "!"
 	ControlModePAT        ControlMode = "$"
@@ -65,7 +68,9 @@ type controlResult struct {
 	Shortcut   string
 	CommandID  string
 	ListID     string
+	SpaceID    string
 	TaskID     string
+	CommentID  string
 	TaskTitle  string
 	Attachment *provider.Attachment
 }
@@ -175,6 +180,7 @@ type RootModel struct {
 	providerSetupIndex  int
 	statusLine          string
 	lists               []cache.ListEntity
+	spaces              []cache.SpaceEntity
 	sidebar             components.SidebarModel
 	taskTable           components.TaskTableModel
 	detailPanel         components.DetailModel
@@ -192,6 +198,7 @@ type RootModel struct {
 
 	statusFilter string
 	searchQuery  string
+	terminalFocused bool
 
 	listSearchQuery       string
 	listSortMode          cache.ListSortMode
@@ -213,6 +220,7 @@ type RootModel struct {
 
 	editorOpen     bool
 	editorTarget   EditorTarget
+	editorContext  map[string]string
 	editorModel    components.TextEditorModel
 	confirmOpen    bool
 	confirmModel   components.ConfirmModel
@@ -235,6 +243,7 @@ type RootModel struct {
 
 type dataLoadedMsg struct {
 	lists                  []cache.ListEntity
+	spaces                 []cache.SpaceEntity
 	tasks                  []cache.TaskEntity
 	statuses               []string
 	err                    error
@@ -291,6 +300,8 @@ type detailRevalidateResultMsg struct {
 	Err    error
 }
 
+type pollTaskMsg struct{}
+
 type manualTaskRefreshResultMsg struct {
 	TaskID string
 	Err    error
@@ -342,15 +353,39 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 		kittyImageIDs:       make(map[string]uint32),
 		nextKittyID:         1,
 		kittyGraphicsEnabled: false,
+		terminalFocused:      true,
 	}
 }
 
 func (m RootModel) Init() tea.Cmd {
-	return tea.Batch(m.loadDataCmd(), m.fetchCurrentUserCmd())
+	return tea.Batch(
+		m.loadDataCmd(),
+		m.fetchCurrentUserCmd(),
+		m.pollTaskCmd(),
+		func() tea.Msg {
+			fmt.Print("\x1b[?1004h")
+			return nil
+		},
+	)
 }
 
 func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.FocusMsg:
+		m.terminalFocused = true
+		return m, m.startDetailRevalidate()
+
+	case tea.BlurMsg:
+		m.terminalFocused = false
+		return m, nil
+
+	case pollTaskMsg:
+		var cmd tea.Cmd
+		if m.terminalFocused && m.displayedTaskID != "" && !m.detailLoading && !m.editorOpen && !m.confirmOpen {
+			cmd = m.revalidateDetailCmd(m.displayedTaskID, m.detailReqToken)
+		}
+		return m, tea.Batch(cmd, m.pollTaskCmd())
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -557,6 +592,9 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if msg.Type == tea.KeyEnter && m.activePane == 0 {
+			if m.sidebar.ToggleSelectedCollapse() {
+				return m, nil
+			}
 			newListID := m.selectedListIDFromSidebar()
 			if newListID != "" && newListID != m.selectedListID {
 				m.selectedListID = newListID
@@ -571,7 +609,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sync.SetActiveListID(newListID)
 				}
 				return m, m.loadDataCmd()
-			} else if !m.syncing {
+			} else if newListID != "" && !m.syncing {
 				m.syncing = true
 				m.syncFrame = 0
 				m.statusLine = "Sync in progress..."
@@ -650,14 +688,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		case m.keymap.CreateList:
-			list, _ := m.repo.GetListByID(m.selectedListID)
-			spaceID := ""
-			if list != nil {
-				spaceID = list.SpaceID
-			}
-			if spaceID != "" {
-				return m.openEditor(EditorTargetListCreate, "", "Create new List name:")
-			}
+			m.openControlCenter(ControlModeSpace)
+			return m, nil
 		case m.keymap.DeleteList:
 			if m.activePane == 0 && m.selectedListID != "" {
 				list, _ := m.repo.GetListByID(m.selectedListID)
@@ -673,6 +705,11 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if ok && row.ID != "" {
 					return m.openEditor(EditorTargetCommentCreate, "", "Add Comment:")
 				}
+			}
+		case m.keymap.DeleteComment:
+			if m.displayedTaskID != "" {
+				m.openControlCenter(ControlModeComment)
+				return m, nil
 			}
 		case m.keymap.Edit:
 			if m.activePane == 1 {
@@ -852,6 +889,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.lists = msg.lists
+		m.spaces = msg.spaces
 		m.selectedListID = msg.selectedListID
 		if m.selectedListID != "" && m.selectedListID != previousListID {
 			m.markListOpened(m.selectedListID)
@@ -864,19 +902,18 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.provider = m.sync.ProviderDisplayName()
 		}
 
-		sidebarItems := make([]string, 0, len(msg.lists))
+		sidebarRows := mapListsToRows(msg.lists, msg.spaces)
+		m.sidebar.SetRows(sidebarRows)
+		
 		selectedIdx := 0
-		for i, list := range msg.lists {
-			prefix := " "
-			if list.Favorite {
-				prefix = "*"
-			}
-			sidebarItems = append(sidebarItems, fmt.Sprintf("%s %s", prefix, list.Name))
-			if list.ID == m.selectedListID {
-				selectedIdx = i
+		if m.selectedListID != "" {
+			for i, row := range sidebarRows {
+				if row.ID == m.selectedListID {
+					selectedIdx = i
+					break
+				}
 			}
 		}
-		m.sidebar.SetItems(sidebarItems)
 		m.sidebar.SetSelectedIndex(selectedIdx)
 
 		m.taskTable.SetRows(mapTasksToRows(msg.tasks, m.taskGroupMode, m.taskSubtasks))
@@ -1442,6 +1479,11 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			return dataLoadedMsg{err: err}
 		}
 
+		spaces, err := m.repo.GetSpacesByProvider(activeProviderID)
+		if err != nil {
+			return dataLoadedMsg{err: err}
+		}
+
 		selectedListID := currentListID
 		if selectedListID == "" && len(lists) > 0 {
 			selectedListID = lists[0].ID
@@ -1478,6 +1520,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 		}
 
 		msg.lists = lists
+		msg.spaces = spaces
 		msg.tasks = tasks
 		msg.statuses = statuses
 		msg.selectedListID = selectedListID
@@ -1711,14 +1754,11 @@ func (m RootModel) openTaskInBrowserCmd(url string) tea.Cmd {
 }
 
 func (m RootModel) selectedListIDFromSidebar() string {
-	if len(m.lists) == 0 {
+	row, ok := m.sidebar.Selected()
+	if !ok || row.Type != components.SidebarRowList {
 		return ""
 	}
-	idx := m.sidebar.SelectedIndex()
-	if idx < 0 || idx >= len(m.lists) {
-		return m.lists[0].ID
-	}
-	return m.lists[idx].ID
+	return row.ID
 }
 
 func (m RootModel) currentSelectedTaskID() string {
@@ -1912,6 +1952,12 @@ func (m *RootModel) selectCursorTaskForDisplayCmd() tea.Cmd {
 		return m.refreshDetail(false, "")
 	}
 	return m.startDetailRevalidate()
+}
+
+func (m RootModel) pollTaskCmd() tea.Cmd {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg {
+		return pollTaskMsg{}
+	})
 }
 
 func (m RootModel) revalidateDetailCmd(taskID string, token int64) tea.Cmd {
@@ -2259,6 +2305,89 @@ func containsListID(lists []cache.ListEntity, listID string) bool {
 		}
 	}
 	return false
+}
+
+func mapListsToRows(lists []cache.ListEntity, spaces []cache.SpaceEntity) []components.SidebarRow {
+	spacesByID := make(map[string]cache.SpaceEntity)
+	for _, s := range spaces {
+		spacesByID[s.ID] = s
+	}
+
+	listsBySpace := make(map[string][]cache.ListEntity)
+	for _, l := range lists {
+		listsBySpace[l.SpaceID] = append(listsBySpace[l.SpaceID], l)
+	}
+
+	// Group spaces by workspace
+	spacesByWorkspace := make(map[string][]cache.SpaceEntity)
+	workspaceNames := make(map[string]string)
+	for _, s := range spaces {
+		wsID := s.WorkspaceID
+		if wsID == "" {
+			wsID = "unknown"
+		}
+		spacesByWorkspace[wsID] = append(spacesByWorkspace[wsID], s)
+		if s.WorkspaceName != "" {
+			workspaceNames[wsID] = s.WorkspaceName
+		} else if workspaceNames[wsID] == "" {
+			workspaceNames[wsID] = "Workspace: " + wsID
+		}
+	}
+
+	// Sort workspaces
+	wsIDs := make([]string, 0, len(spacesByWorkspace))
+	for id := range spacesByWorkspace {
+		wsIDs = append(wsIDs, id)
+	}
+	sort.Strings(wsIDs)
+
+	rows := make([]components.SidebarRow, 0, len(lists)+len(spaces)+len(wsIDs))
+
+	for _, wsID := range wsIDs {
+		wsCollapseKey := "ws:" + wsID
+		rows = append(rows, components.SidebarRow{
+			Type:        components.SidebarRowGroup,
+			Title:       workspaceNames[wsID],
+			CollapseKey: wsCollapseKey,
+		})
+
+		wsSpaces := spacesByWorkspace[wsID]
+		sort.Slice(wsSpaces, func(i, j int) bool {
+			return wsSpaces[i].Name < wsSpaces[j].Name
+		})
+
+		for _, s := range wsSpaces {
+			sCollapseKey := "space:" + s.ID
+			rows = append(rows, components.SidebarRow{
+				Type:        components.SidebarRowGroup,
+				Title:       s.Name,
+				Indent:      2,
+				CollapseKey: sCollapseKey,
+				HiddenBy:    []string{wsCollapseKey},
+			})
+
+			sLists := listsBySpace[s.ID]
+			sort.Slice(sLists, func(i, j int) bool {
+				return sLists[i].Name < sLists[j].Name
+			})
+
+			for _, l := range sLists {
+				prefix := "  "
+				if l.Favorite {
+					prefix = "* "
+				}
+				rows = append(rows, components.SidebarRow{
+					Type:     components.SidebarRowList,
+					ID:       l.ID,
+					Title:    prefix + l.Name,
+					Indent:   4,
+					HiddenBy: []string{wsCollapseKey, sCollapseKey},
+				})
+			}
+		}
+	}
+
+	return rows
 }
 
 func mapTasksToRows(tasks []cache.TaskEntity, groupMode TaskGroupMode, subtaskMode TaskSubtaskMode) []components.TaskTableRow {
@@ -2815,6 +2944,7 @@ func normalizeSearchText(s string) string {
 func (m *RootModel) openEditor(target EditorTarget, initialValue string, prompt string) (tea.Model, tea.Cmd) {
 	m.editorOpen = true
 	m.editorTarget = target
+	m.editorContext = make(map[string]string)
 	m.editorModel = components.NewTextEditor(prompt)
 	m.editorModel.Value = initialValue
 	m.editorModel.Cursor = len(initialValue)
@@ -2876,10 +3006,13 @@ func (m RootModel) submitEditorCmd(target EditorTarget, value string) tea.Cmd {
 			return editResultMsg{}
 
 		case EditorTargetListCreate:
-			list, _ := m.repo.GetListByID(m.selectedListID)
-			spaceID := ""
-			if list != nil {
-				spaceID = list.SpaceID
+			spaceID := m.editorContext["spaceID"]
+			if spaceID == "" {
+				// Fallback to selected list's space if somehow it's missing
+				list, _ := m.repo.GetListByID(m.selectedListID)
+				if list != nil {
+					spaceID = list.SpaceID
+				}
 			}
 			if spaceID == "" {
 				return editResultMsg{err: fmt.Errorf("could not determine space for list creation")}

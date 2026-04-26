@@ -138,8 +138,14 @@ func (m *RootModel) syncControlModeByPrefix() {
 	case string(ControlModeList):
 		m.controlMode = ControlModeList
 		m.controlInput = strings.TrimSpace(trimmed[1:])
+	case string(ControlModeSpace):
+		m.controlMode = ControlModeSpace
+		m.controlInput = strings.TrimSpace(trimmed[1:])
 	case string(ControlModeTask):
 		m.controlMode = ControlModeTask
+		m.controlInput = strings.TrimSpace(trimmed[1:])
+	case string(ControlModeComment):
+		m.controlMode = ControlModeComment
 		m.controlInput = strings.TrimSpace(trimmed[1:])
 	case string(ControlModeHelp):
 		m.controlMode = ControlModeHelp
@@ -157,8 +163,12 @@ func (m *RootModel) refreshControlResults() {
 	switch m.controlMode {
 	case ControlModeList:
 		m.controlResults = m.buildListResults(m.controlInput)
+	case ControlModeSpace:
+		m.controlResults = m.buildSpaceResults(m.controlInput)
 	case ControlModeTask:
 		m.controlResults = m.buildTaskResults(m.controlInput)
+	case ControlModeComment:
+		m.controlResults = m.buildCommentResults(m.controlInput)
 	case ControlModeHelp:
 		m.controlResults = m.buildHelpResults(m.controlInput)
 	case ControlModeAttachment:
@@ -278,6 +288,33 @@ func (m *RootModel) buildCommandResults(query string) []controlResult {
 	return results
 }
 
+func (m *RootModel) buildSpaceResults(query string) []controlResult {
+	query = strings.ToLower(strings.TrimSpace(query))
+	// We need spaces from cache, but they might not be in RootModel yet.
+	// We added them to dataLoadedMsg so they are in m.repo.
+	// For now let's assume we can fetch them from repo or add them to RootModel.
+	// I added them to dataLoadedMsg, but I didn't add them to RootModel struct.
+	// Let's add them to RootModel struct.
+	spaces, _ := m.repo.GetSpacesByProvider(m.activeProviderID)
+
+	results := make([]controlResult, 0, len(spaces))
+	for _, s := range spaces {
+		name := strings.ToLower(s.Name)
+		wsName := strings.ToLower(s.WorkspaceName)
+		if query != "" && !strings.Contains(name, query) && !strings.Contains(wsName, query) {
+			continue
+		}
+		results = append(results, controlResult{
+			Kind:     "space",
+			Title:    s.Name,
+			Subtitle: s.WorkspaceName,
+			Badge:    "space",
+			SpaceID:  s.ID,
+		})
+	}
+	return results
+}
+
 func (m *RootModel) buildListResults(query string) []controlResult {
 	query = strings.ToLower(strings.TrimSpace(query))
 	results := make([]controlResult, 0, len(m.lists))
@@ -291,6 +328,39 @@ func (m *RootModel) buildListResults(query string) []controlResult {
 			badge = "favorite"
 		}
 		results = append(results, controlResult{Kind: "list", Title: list.Name, Subtitle: list.ID, Badge: badge, ListID: list.ID})
+	}
+	return results
+}
+
+func (m *RootModel) buildCommentResults(query string) []controlResult {
+	if m.displayedTaskID == "" {
+		return []controlResult{{Kind: "error", Title: "No task selected"}}
+	}
+	comments, err := m.repo.GetTaskComments(m.displayedTaskID, 100)
+	if err != nil || len(comments) == 0 {
+		return []controlResult{{Kind: "error", Title: "No comments found"}}
+	}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	results := make([]controlResult, 0, len(comments))
+	for _, c := range comments {
+		if query != "" && !strings.Contains(strings.ToLower(c.BodyMD), query) && !strings.Contains(strings.ToLower(c.AuthorName), query) {
+			continue
+		}
+		
+		canDelete := c.AuthorID == m.currentUser.ID
+		badge := "comment"
+		if canDelete {
+			badge = "yours"
+		}
+
+		results = append(results, controlResult{
+			Kind:      "comment",
+			Title:     c.BodyMD,
+			Subtitle:  c.AuthorName + " - " + time.UnixMilli(c.CreatedAtUnix).Format("2006-01-02 15:04"),
+			Badge:     badge,
+			CommentID: c.ID,
+		})
 	}
 	return results
 }
@@ -319,7 +389,9 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 	items := []controlResult{
 		{Kind: "help", Title: "> Run commands", Subtitle: "Actions, toggles, settings", Badge: "mode", Shortcut: ">"},
 		{Kind: "help", Title: "@ Search lists", Subtitle: "Jump directly to lists", Badge: "mode", Shortcut: "@"},
+		{Kind: "help", Title: "# Search spaces", Subtitle: "Choose a space", Badge: "mode", Shortcut: "#"},
 		{Kind: "help", Title: "/ Search tasks", Subtitle: "Open task detail quickly", Badge: "mode", Shortcut: "/"},
+		{Kind: "help", Title: ", Search comments", Subtitle: "Manage your comments", Badge: "mode", Shortcut: ","},
 		{Kind: "help", Title: "! Search attachments", Subtitle: "Open attachments for current task", Badge: "mode", Shortcut: "!"},
 		{Kind: "help", Title: "? Help", Subtitle: "Searchable command center help", Badge: "mode", Shortcut: "?"},
 		{Kind: "help", Title: "ctrl+p / ctrl+k / :", Subtitle: "Open control center", Badge: "keys", Shortcut: ":"},
@@ -454,6 +526,30 @@ func (m *RootModel) runControlResult(result controlResult) tea.Cmd {
 		m.persistLastOpenedList(result.ListID)
 		m.persistSessionSnapshot()
 		return m.loadDataCmd()
+	case "space":
+		// This is used for "Create List" flow
+		_, cmd := m.openEditor(EditorTargetListCreate, "", "Create new List name in space '"+result.Title+"':")
+		m.editorContext["spaceID"] = result.SpaceID
+		return cmd
+	case "comment":
+		if result.CommentID != "" {
+			// Actually, let's just trigger confirmation if it's "yours"
+			if result.Badge == "yours" {
+				_, cmd := m.openConfirm("Delete your comment: "+components.Truncate(result.Title, 40, "...")+"?", "DELETE", func() tea.Cmd {
+					return func() tea.Msg {
+						if err := m.sync.QueueDeleteComment(result.CommentID); err != nil {
+							return editResultMsg{err: err}
+						}
+						return editResultMsg{}
+					}
+				})
+				return cmd
+			} else {
+				m.statusLine = "You can only delete your own comments"
+				return nil
+			}
+		}
+		return nil
 	case "task":
 		m.displayedTaskID = result.TaskID
 		m.selectedTaskID = result.TaskID
@@ -513,16 +609,7 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		m.statusLine = "No task selected"
 		return nil
 	case "create_list":
-		list, _ := m.repo.GetListByID(m.selectedListID)
-		spaceID := ""
-		if list != nil {
-			spaceID = list.SpaceID
-		}
-		if spaceID != "" {
-			_, cmd := m.openEditor(EditorTargetListCreate, "", "Create new List name:")
-			return cmd
-		}
-		m.statusLine = "Could not determine space"
+		m.openControlCenter(ControlModeSpace)
 		return nil
 	case "delete_list":
 		if m.selectedListID != "" {
@@ -543,6 +630,13 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 			return cmd
 		}
 		m.statusLine = "No task selected"
+		return nil
+	case "delete_comment":
+		if m.displayedTaskID != "" {
+			m.openControlCenter(ControlModeComment)
+			return nil
+		}
+		m.statusLine = "No task opened"
 		return nil
 	case "refresh":
 		m.statusLine = "Refreshing data"
@@ -661,6 +755,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "create_list", Title: "Create List", Subtitle: "Create a new list in the current space", Badge: "list", Aliases: []string{"new list", "create list", "add list"}, Shortcut: m.keymap.CreateList},
 		{ID: "delete_list", Title: "Delete List", Subtitle: "Delete the selected list", Badge: "list", Aliases: []string{"remove list", "delete list", "rm list"}, Shortcut: m.keymap.DeleteList},
 		{ID: "add_comment", Title: "Add Comment", Subtitle: "Post a comment to the selected task", Badge: "comment", Aliases: []string{"post comment", "add comment", "new comment"}, Shortcut: m.keymap.AddComment},
+		{ID: "delete_comment", Title: "Delete Comment...", Subtitle: "Choose one of your comments to delete", Badge: "comment", Aliases: []string{"remove comment", "delete comment", "rm comment"}},
 		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}, Shortcut: "r"},
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}, Shortcut: "s"},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},
