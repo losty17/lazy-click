@@ -526,6 +526,19 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if msg.String() == m.keymap.OpenTaskInBrowser {
+			url := m.currentTaskBrowserURL()
+			if url != "" {
+				m.openTaskURL = url
+				m.openTaskPrompt = true
+				return m, nil
+			}
+		}
+
+		if msg.String() == m.keymap.CopyTaskLink {
+			return m, m.copyTaskLinkCmd()
+		}
+
 		if m.activePane == 2 && m.detailPanel.Mode == components.ModeInsert {
 			if msg.String() == "ctrl+c" || (msg.String() == "q" && m.detailPanel.Editor.Mode == components.VimModeNormal) {
 				if m.hasUnsavedChanges() {
@@ -678,15 +691,6 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.selectCursorTaskForDisplayCmd()
 		}
 
-		if msg.Type == tea.KeyEnter && m.activePane == 2 {
-			url := m.currentTaskBrowserURL()
-			if url != "" {
-				m.openTaskURL = url
-				m.openTaskPrompt = true
-				return m, nil
-			}
-		}
-
 		switch msg.String() {
 		case "home":
 			return m.handleMoveToTop()
@@ -786,8 +790,6 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusLine = "Task title: " + row.Title
 				return m, nil
 			}
-		case m.keymap.CopyTaskLink:
-			return m, m.copyTaskLinkCmd()
 		case m.keymap.SortLists:
 			if m.listSortMode == cache.ListSortMostRecentlyOpen {
 				m.listSortMode = cache.ListSortNameAsc

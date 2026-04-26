@@ -421,6 +421,7 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "V", Subtitle: "Cycle view mode", Badge: "keys"},
 		{Kind: "help", Title: "a", Subtitle: "Download all attachments", Badge: "keys"},
 		{Kind: "help", Title: "A", Subtitle: "Download and open attachments", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.OpenTaskInBrowser, Subtitle: "Open task in browser", Badge: "keys"},
 		{Kind: "help", Title: m.keymap.CopyTaskLink, Subtitle: "Copy task link to clipboard", Badge: "keys"},
 		{Kind: "help", Title: m.keymap.RefreshTask, Subtitle: "Force refresh task from provider", Badge: "keys"},
 		{Kind: "help", Title: m.keymap.CollapseAll, Subtitle: "Toggle collapse all groups", Badge: "keys"},
@@ -745,6 +746,17 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		}
 		m.persistSessionSnapshot()
 		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
+	case "open_in_browser":
+		url := m.currentTaskBrowserURL()
+		if url != "" {
+			m.openTaskURL = url
+			m.openTaskPrompt = true
+			return nil
+		}
+		m.statusLine = "No task URL available"
+		return nil
+	case "copy_task_link":
+		return m.copyTaskLinkCmd()
 	case "set_clickup_pat":
 		m.openControlCenter(ControlModePAT)
 		return nil
@@ -782,6 +794,8 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}, Shortcut: m.keymap.GroupTasks},
 		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}, Shortcut: m.keymap.Subtasks},
 		{ID: "cycle_view_mode", Title: "Cycle view mode", Subtitle: "Toggle layout modes", Badge: "toggle", Aliases: []string{"view mode", "layout"}, Shortcut: m.keymap.ViewMode},
+		{ID: "open_in_browser", Title: "Open in browser", Subtitle: "Open the selected task in your default browser", Badge: "task", Aliases: []string{"open", "browser"}, Shortcut: m.keymap.OpenTaskInBrowser},
+		{ID: "copy_task_link", Title: "Copy task link", Subtitle: "Copy the selected task link to clipboard", Badge: "task", Aliases: []string{"copy link", "share"}, Shortcut: m.keymap.CopyTaskLink},
 		{ID: "open_attachments", Title: "Open attachments...", Subtitle: "Choose an attachment to open", Badge: "file", Aliases: []string{"attachments", "files"}, Shortcut: "A"},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
 		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}, Shortcut: m.keymap.Favorite},

@@ -27,6 +27,7 @@ type Keymap struct {
 	DeleteList          string
 	DeleteComment       string
 	ViewMode            string
+	OpenTaskInBrowser   string
 }
 
 func DefaultKeymap() Keymap {
@@ -57,5 +58,6 @@ func DefaultKeymap() Keymap {
 		DeleteList:          "L",
 		DeleteComment:       "K",
 		ViewMode:            "V",
+		OpenTaskInBrowser:   "shift+enter",
 	}
 }
