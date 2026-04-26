@@ -528,7 +528,7 @@ func (m *RootModel) runControlResult(result controlResult) tea.Cmd {
 		return m.loadDataCmd()
 	case "space":
 		// This is used for "Create List" flow
-		_, cmd := m.openEditor(EditorTargetListCreate, "", "Create new List name in space '"+result.Title+"':")
+		_, cmd := m.openEditor(EditorTargetListCreate, "", "Create new List name in space '"+result.Title+"':", false)
 		m.editorContext["spaceID"] = result.SpaceID
 		return cmd
 	case "comment":
@@ -585,7 +585,7 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		return tea.Quit
 	case "create_task":
 		if m.selectedListID != "" {
-			_, cmd := m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:")
+			_, cmd := m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:", false)
 			return cmd
 		}
 		m.statusLine = "No list selected"
@@ -603,7 +603,7 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 	case "edit_task":
 		row, ok := m.taskTable.Selected()
 		if ok && row.ID != "" {
-			_, cmd := m.openEditor(EditorTargetTaskTitle, row.Title, "Edit Task title:")
+			_, cmd := m.openEditor(EditorTargetTaskTitle, row.Title, "Edit Task title:", false)
 			return cmd
 		}
 		m.statusLine = "No task selected"
@@ -626,7 +626,7 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 	case "add_comment":
 		row, ok := m.taskTable.Selected()
 		if ok && row.ID != "" {
-			_, cmd := m.openEditor(EditorTargetCommentCreate, "", "Add Comment:")
+			_, cmd := m.openEditor(EditorTargetCommentCreate, "", "Add Comment:", true)
 			return cmd
 		}
 		m.statusLine = "No task selected"

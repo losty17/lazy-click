@@ -1,6 +1,8 @@
 package components
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -146,24 +148,70 @@ func (m TextEditorModel) Update(msg tea.Msg) (TextEditorModel, tea.Cmd) {
 }
 
 func (m TextEditorModel) Render(width int) string {
-	if width < 10 {
+	if width < 5 {
 		return ""
 	}
-	
+
 	displayValue := m.Value
 	if m.Active {
 		if m.Cursor < len(displayValue) {
 			cursorChar := string(displayValue[m.Cursor])
-			// If it's a newline, we need to visualize it as a space or similar
+			// If it's a newline, we need to visualize it as a space before the newline
 			if cursorChar == "\n" {
 				cursorChar = " \n"
+				cursorStyle := lipgloss.NewStyle().Reverse(true)
+				displayValue = displayValue[:m.Cursor] + cursorStyle.Render(" ") + displayValue[m.Cursor:]
+			} else {
+				cursorStyle := lipgloss.NewStyle().Reverse(true)
+				displayValue = displayValue[:m.Cursor] + cursorStyle.Render(cursorChar) + displayValue[m.Cursor+1:]
 			}
-			cursorStyle := lipgloss.NewStyle().Reverse(true)
-			displayValue = displayValue[:m.Cursor] + cursorStyle.Render(cursorChar) + displayValue[m.Cursor+1:]
 		} else {
 			displayValue += lipgloss.NewStyle().Reverse(true).Render(" ")
 		}
 	}
 
 	return displayValue
+}
+
+func (m TextEditorModel) RenderOverlay(width int) string {
+	overlayWidth := min(max(width-10, 40), 100)
+	editorWidth := overlayWidth - 6
+	
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 2).
+		Width(overlayWidth)
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205"))
+	
+	valWithCursor := m.Render(editorWidth)
+	parts := strings.Split(valWithCursor, "\n")
+	var wrappedLines []string
+	for _, part := range parts {
+		wrappedLines = append(wrappedLines, breakLines(part, editorWidth)...)
+	}
+	displayValue := strings.Join(wrappedLines, "\n")
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render(m.Prompt),
+		"",
+		displayValue,
+		"",
+		HelpStyle.Render("Enter to submit, Esc to cancel"),
+	)
+
+	if m.Mode == VimModeNormal {
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			content,
+			HelpStyle.Render("Mode: NORMAL (press 'i' to insert)"),
+		)
+	} else {
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			content,
+			HelpStyle.Render("Mode: INSERT (press 'Esc' for normal)"),
+		)
+	}
+
+	return style.Render(content)
 }

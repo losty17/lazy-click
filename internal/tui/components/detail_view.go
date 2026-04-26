@@ -2,7 +2,6 @@ package components
 
 import (
 	"strings"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -181,39 +180,6 @@ func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-func findOffsetAtCoords(s string, targetLine int, targetCol int, width int) int {
-	currOffset := 0
-	currLine := 0
-	
-	parts := strings.Split(s, "\n")
-	for _, part := range parts {
-		wrapped := breakLines(part, width)
-		if currLine+len(wrapped) > targetLine {
-			// Target is within this part
-			subLine := targetLine - currLine
-			acc := 0
-			for i, w := range wrapped {
-				if i == subLine {
-					// We are on the target wrapped line. 
-					// Find character at targetCol
-					runes := []rune(w)
-					if targetCol >= len(runes) {
-						if len(runes) > 0 {
-							return currOffset + acc + len(string(runes[:len(runes)-1]))
-						}
-						return currOffset + acc
-					}
-					return currOffset + acc + len(string(runes[:targetCol]))
-				}
-				acc += len(w)
-			}
-		}
-		currOffset += len(part) + 1
-		currLine += len(wrapped)
-	}
-	return len(s)
 }
 
 func (m DetailModel) countFieldLines(idx int, width int) int {
@@ -415,107 +381,4 @@ func (m *DetailModel) Render(active bool, width int, height int) string {
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-func breakLines(s string, width int) []string {
-	if width <= 0 {
-		return []string{}
-	}
-
-	// If it's a Kitty image placement, don't wrap it.
-	if strings.Contains(s, "\x1b_G") {
-		return []string{s}
-	}
-
-	if s == "" {
-		return []string{""}
-	}
-
-	lines := []string{}
-	var current strings.Builder
-	currentDisplayWidth := 0
-
-	i := 0
-	for i < len(s) {
-		// Check for ANSI sequence
-		if loc := AnsiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
-			seq := s[i : i+loc[1]]
-			current.WriteString(seq)
-			i += loc[1]
-			continue
-		}
-
-		// Handle normal rune
-		r, size := utf8.DecodeRuneInString(s[i:])
-		rWidth := 1 // Simplified, same as DisplayWidth
-
-		if currentDisplayWidth+rWidth > width {
-			// Time to wrap. 
-			// Try to find a space to break at
-			line := current.String()
-			breakPoint := strings.LastIndex(line, " ")
-			
-			// We only want to break at a space if it's reasonably close to the end
-			// to avoid weirdly short lines. But let's keep it simple for now.
-			if breakPoint != -1 && breakPoint > width/2 {
-				// Split at space
-				lines = append(lines, line[:breakPoint])
-				remainingInLine := line[breakPoint+1:]
-				current.Reset()
-				current.WriteString(remainingInLine)
-				currentDisplayWidth = DisplayWidth(remainingInLine)
-			} else {
-				// Hard break
-				lines = append(lines, line)
-				current.Reset()
-				currentDisplayWidth = 0
-			}
-		}
-
-		current.WriteRune(r)
-		currentDisplayWidth += rWidth
-		i += size
-	}
-
-	if current.Len() > 0 {
-		lines = append(lines, current.String())
-	}
-
-	return lines
-}
-
-func findLineOfOffset(s string, offset int, width int) (lineIdx int, colIdx int) {
-	if offset <= 0 {
-		return 0, 0
-	}
-	
-	lines := 0
-	currOffset := 0
-	
-	parts := strings.Split(s, "\n")
-	for _, part := range parts {
-		if currOffset+len(part) >= offset {
-			// Found the part
-			remaining := offset - currOffset
-			// Calculate wrapped lines within this part
-			wrapped := breakLines(part, width)
-			wrappedLineIdx := 0
-			acc := 0
-			for j, w := range wrapped {
-				// Use DisplayWidth to match visual boundaries if there are ANSI chars, 
-				// but here we are using raw string 'part'
-				if acc+len(w) >= remaining {
-					wrappedLineIdx = j
-					break
-				}
-				acc += len(w)
-			}
-			return lines + wrappedLineIdx, remaining - acc
-		}
-		currOffset += len(part) + 1 // +1 for \n
-		wrapped := breakLines(part, width)
-		lines += len(wrapped)
-	}
-	
-	return lines - 1, 0
 }

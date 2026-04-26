@@ -389,6 +389,9 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.editorOpen {
+			m.editorModel.Width = max(40, m.width-20)
+		}
 		var detailCmd tea.Cmd
 		m.detailPanel, detailCmd = m.detailPanel.Update(msg)
 		return m, detailCmd
@@ -676,7 +679,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.keymap.CreateTask:
 			if m.selectedListID != "" {
-				return m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:")
+				return m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:", false)
 			}
 		case m.keymap.DeleteTask:
 			if m.activePane == 1 {
@@ -703,7 +706,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.activePane == 1 {
 				row, ok := m.taskTable.Selected()
 				if ok && row.ID != "" {
-					return m.openEditor(EditorTargetCommentCreate, "", "Add Comment:")
+					return m.openEditor(EditorTargetCommentCreate, "", "Add Comment:", true)
 				}
 			}
 		case m.keymap.DeleteComment:
@@ -1206,7 +1209,7 @@ func (m RootModel) View() string {
 		screen = overlayCentered(screen, overlay, totalWidth, y)
 	}
 	if m.editorOpen {
-		overlay := m.editorModel.Render(totalWidth)
+		overlay := m.editorModel.RenderOverlay(totalWidth)
 		y := centeredOverlayY(screen, overlay, 0)
 		screen = overlayCentered(screen, overlay, totalWidth, y)
 	}
@@ -2941,11 +2944,13 @@ func normalizeSearchText(s string) string {
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
-func (m *RootModel) openEditor(target EditorTarget, initialValue string, prompt string) (tea.Model, tea.Cmd) {
+func (m *RootModel) openEditor(target EditorTarget, initialValue string, prompt string, multiline bool) (tea.Model, tea.Cmd) {
 	m.editorOpen = true
 	m.editorTarget = target
 	m.editorContext = make(map[string]string)
 	m.editorModel = components.NewTextEditor(prompt)
+	m.editorModel.MultiLine = multiline
+	m.editorModel.Width = max(40, m.width-20)
 	m.editorModel.Value = initialValue
 	m.editorModel.Cursor = len(initialValue)
 	m.editorModel.Active = true

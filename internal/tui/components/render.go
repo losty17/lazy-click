@@ -155,3 +155,130 @@ func VisibleWindow(total int, selected int, size int) (start int, end int) {
 	}
 	return start, end
 }
+
+func breakLines(s string, width int) []string {
+	if width <= 0 {
+		return []string{}
+	}
+
+	// If it's a Kitty image placement, don't wrap it.
+	if strings.Contains(s, "\x1b_G") {
+		return []string{s}
+	}
+
+	if s == "" {
+		return []string{""}
+	}
+
+	lines := []string{}
+	var current strings.Builder
+	currentDisplayWidth := 0
+
+	i := 0
+	for i < len(s) {
+		// Check for ANSI sequence
+		if loc := AnsiRegex.FindStringIndex(s[i:]); loc != nil && loc[0] == 0 {
+			seq := s[i : i+loc[1]]
+			current.WriteString(seq)
+			i += loc[1]
+			continue
+		}
+
+		// Handle normal rune
+		r, size := utf8.DecodeRuneInString(s[i:])
+		rWidth := 1 // Simplified, same as DisplayWidth
+
+		if currentDisplayWidth+rWidth > width {
+			// Time to wrap. 
+			// Try to find a space to break at
+			line := current.String()
+			breakPoint := strings.LastIndex(line, " ")
+			
+			// We only want to break at a space if it's reasonably close to the end
+			// to avoid weirdly short lines. But let's keep it simple for now.
+			if breakPoint != -1 && breakPoint > width/2 {
+				// Split at space
+				lines = append(lines, line[:breakPoint])
+				remainingInLine := line[breakPoint+1:]
+				current.Reset()
+				current.WriteString(remainingInLine)
+				currentDisplayWidth = DisplayWidth(remainingInLine)
+			} else {
+				// Hard break
+				lines = append(lines, line)
+				current.Reset()
+				currentDisplayWidth = 0
+			}
+		}
+
+		current.WriteRune(r)
+		currentDisplayWidth += rWidth
+		i += size
+	}
+
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+
+	return lines
+}
+
+func findLineOfOffset(s string, offset int, width int) (lineIdx int, colIdx int) {
+	if offset <= 0 {
+		return 0, 0
+	}
+	
+	lines := 0
+	currOffset := 0
+	
+	parts := strings.Split(s, "\n")
+	for _, part := range parts {
+		if currOffset+len(part) >= offset {
+			// Found the part
+			remaining := offset - currOffset
+			// Calculate wrapped lines within this part
+			wrapped := breakLines(part, width)
+			wrappedLineIdx := 0
+			acc := 0
+			for j, w := range wrapped {
+				if acc+len(w) >= remaining {
+					wrappedLineIdx = j
+					break
+				}
+				acc += len(w)
+			}
+			return lines + wrappedLineIdx, remaining - acc
+		}
+		currOffset += len(part) + 1 // +1 for \n
+		wrapped := breakLines(part, width)
+		lines += len(wrapped)
+	}
+	
+	return lines - 1, 0
+}
+
+func findOffsetAtCoords(s string, lineIdx int, colIdx int, width int) int {
+	if width <= 0 {
+		return 0
+	}
+	parts := strings.Split(s, "\n")
+	accLines := 0
+	accChars := 0
+	for _, part := range parts {
+		wrapped := breakLines(part, width)
+		if accLines+len(wrapped) > lineIdx {
+			// It's in this part
+			targetWrappedLine := lineIdx - accLines
+			wrappedAccChars := 0
+			for i, w := range wrapped {
+				if i == targetWrappedLine {
+					return accChars + wrappedAccChars + min(colIdx, len(w))
+				}
+				wrappedAccChars += len(w)
+			}
+		}
+		accLines += len(wrapped)
+		accChars += len(part) + 1
+	}
+	return len(s)
+}
