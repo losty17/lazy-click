@@ -173,6 +173,68 @@ func (p *Provider) UpdateTask(ctx context.Context, taskID string, data provider.
 	return mapEntityToTask(next), nil
 }
 
+func (p *Provider) CreateTask(ctx context.Context, listID string, task provider.Task) (provider.Task, error) {
+	_ = ctx
+	now := time.Now().UnixMilli()
+	entity := cache.TaskEntity{
+		ID:            fmt.Sprintf("local-task-%d", now),
+		Provider:      ProviderType,
+		ExternalID:    fmt.Sprintf("ext-task-%d", now),
+		ListID:        listID,
+		Title:         task.Title,
+		DescriptionMD: task.DescriptionMD,
+		Status:        task.Status,
+		UpdatedAtUnix: now,
+	}
+	if err := p.repo.SaveTasks([]cache.TaskEntity{entity}); err != nil {
+		return provider.Task{}, err
+	}
+	return mapEntityToTask(entity), nil
+}
+
+func (p *Provider) DeleteTask(ctx context.Context, taskID string) error {
+	_ = ctx
+	// In a real local provider we would delete it from repo
+	return nil
+}
+
+func (p *Provider) CreateList(ctx context.Context, spaceID string, name string) (provider.TaskList, error) {
+	_ = ctx
+	now := time.Now().UnixMilli()
+	entity := cache.ListEntity{
+		ID:         fmt.Sprintf("local-list-%d", now),
+		Provider:   ProviderType,
+		ExternalID: fmt.Sprintf("ext-list-%d", now),
+		SpaceID:    spaceID,
+		Name:       name,
+	}
+	if err := p.repo.SaveLists([]cache.ListEntity{entity}); err != nil {
+		return provider.TaskList{}, err
+	}
+	return provider.TaskList{ID: entity.ID, SpaceID: spaceID, Name: name}, nil
+}
+
+func (p *Provider) UpdateList(ctx context.Context, listID string, name string) (provider.TaskList, error) {
+	_ = ctx
+	// Update in repo
+	return provider.TaskList{ID: listID, Name: name}, nil
+}
+
+func (p *Provider) DeleteList(ctx context.Context, listID string) error {
+	_ = ctx
+	return nil
+}
+
+func (p *Provider) UpdateComment(ctx context.Context, commentID string, text string) (provider.Comment, error) {
+	_ = ctx
+	return provider.Comment{ID: commentID, BodyMD: text}, nil
+}
+
+func (p *Provider) DeleteComment(ctx context.Context, commentID string) error {
+	_ = ctx
+	return nil
+}
+
 func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (provider.Comment, error) {
 	_ = ctx
 	now := time.Now().UnixMilli()

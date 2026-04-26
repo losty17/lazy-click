@@ -8,9 +8,24 @@ import (
 type ClickUpID string
 
 func (id *ClickUpID) UnmarshalJSON(data []byte) error {
+	var fs FlexString
+	if err := fs.UnmarshalJSON(data); err != nil {
+		return err
+	}
+	*id = ClickUpID(fs)
+	return nil
+}
+
+func (id ClickUpID) String() string {
+	return string(id)
+}
+
+type FlexString string
+
+func (fs *FlexString) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
-		*id = ""
+		*fs = ""
 		return nil
 	}
 
@@ -19,7 +34,7 @@ func (id *ClickUpID) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(trimmed, &s); err != nil {
 			return err
 		}
-		*id = ClickUpID(s)
+		*fs = FlexString(s)
 		return nil
 	}
 
@@ -29,12 +44,12 @@ func (id *ClickUpID) UnmarshalJSON(data []byte) error {
 	if err := dec.Decode(&n); err != nil {
 		return err
 	}
-	*id = ClickUpID(n.String())
+	*fs = FlexString(n.String())
 	return nil
 }
 
-func (id ClickUpID) String() string {
-	return string(id)
+func (fs FlexString) String() string {
+	return string(fs)
 }
 
 type GetTeamsResponse struct {
@@ -42,8 +57,8 @@ type GetTeamsResponse struct {
 }
 
 type TeamDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   ClickUpID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type GetSpacesResponse struct {
@@ -51,8 +66,8 @@ type GetSpacesResponse struct {
 }
 
 type SpaceDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   ClickUpID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type GetListsResponse struct {
@@ -64,13 +79,13 @@ type GetFoldersResponse struct {
 }
 
 type FolderDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   ClickUpID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type ListDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   ClickUpID `json:"id"`
+	Name string    `json:"name"`
 }
 
 type GetTasksResponse struct {
@@ -79,13 +94,13 @@ type GetTasksResponse struct {
 }
 
 type TaskDTO struct {
-	ID           string           `json:"id"`
+	ID           ClickUpID        `json:"id"`
 	Name         string           `json:"name"`
 	Description  string           `json:"description"`
 	Status       TaskStatusDTO    `json:"status"`
 	Priority     *TaskPriorityDTO `json:"priority"`
 	TimeEstimate *int64           `json:"time_estimate"`
-	DueDate      *string          `json:"due_date"`
+	DueDate      *FlexString      `json:"due_date"`
 	Parent       *string          `json:"parent"`
 	Assignees    []UserDTO        `json:"assignees"`
 	Tags         []TagDTO         `json:"tags"`
@@ -96,20 +111,20 @@ type TaskDTO struct {
 }
 
 type AttachmentDTO struct {
-	ID           string  `json:"id"`
-	Date         string  `json:"date"`
-	Title        string  `json:"title"`
-	Type         int     `json:"type"`
-	Source       int     `json:"source"`
-	Version      int     `json:"version"`
-	Extension    string  `json:"extension"`
-	ThumbnailSmall string `json:"thumbnail_small"`
-	ThumbnailLarge string `json:"thumbnail_large"`
-	IsStreamable bool    `json:"is_streamable"`
-	URL          string  `json:"url"`
-	EmailData    any     `json:"email_data"`
-	Priority     int     `json:"priority"`
-	Size         int64   `json:"size"`
+	ID           ClickUpID  `json:"id"`
+	Date         FlexString `json:"date"`
+	Title        string     `json:"title"`
+	Type         int        `json:"type"`
+	Source       int       `json:"source"`
+	Version      int       `json:"version"`
+	Extension    string    `json:"extension"`
+	ThumbnailSmall string  `json:"thumbnail_small"`
+	ThumbnailLarge string  `json:"thumbnail_large"`
+	IsStreamable bool      `json:"is_streamable"`
+	URL          string    `json:"url"`
+	EmailData    any       `json:"email_data"`
+	Priority     int       `json:"priority"`
+	Size         int64     `json:"size"`
 }
 
 type TaskStatusDTO struct {
@@ -129,10 +144,10 @@ type TagDTO struct {
 }
 
 type CustomFieldDTO struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Type  string `json:"type"`
-	Value any    `json:"value"`
+	ID    ClickUpID `json:"id"`
+	Name  string    `json:"name"`
+	Type  string    `json:"type"`
+	Value any       `json:"value"`
 }
 
 type UpdateTaskRequest struct {
@@ -140,6 +155,24 @@ type UpdateTaskRequest struct {
 	Description *string `json:"description,omitempty"`
 	Status      *string `json:"status,omitempty"`
 	DueDate     *int64  `json:"due_date,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
+}
+
+type CreateTaskRequest struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description,omitempty"`
+	Status      string  `json:"status,omitempty"`
+	DueDate     *int64  `json:"due_date,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
+	Parent      *string `json:"parent,omitempty"`
+}
+
+type CreateListRequest struct {
+	Name string `json:"name"`
+}
+
+type UpdateListRequest struct {
+	Name string `json:"name"`
 }
 
 type AddCommentRequest struct {
@@ -148,9 +181,9 @@ type AddCommentRequest struct {
 }
 
 type AddCommentResponse struct {
-	ID      string          `json:"id"`
+	ID      ClickUpID       `json:"id"`
 	Comment json.RawMessage `json:"comment"`
-	Date    string          `json:"date"`
+	Date    FlexString      `json:"date"`
 	User    UserDTO         `json:"user"`
 }
 
@@ -159,9 +192,9 @@ type GetTaskCommentsResponse struct {
 }
 
 type CommentDTO struct {
-	ID      string          `json:"id"`
+	ID      ClickUpID       `json:"id"`
 	Comment json.RawMessage `json:"comment"`
-	Date    string          `json:"date"`
+	Date    FlexString      `json:"date"`
 	User    UserDTO         `json:"user"`
 }
 

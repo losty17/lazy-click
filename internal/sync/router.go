@@ -73,12 +73,76 @@ func (r *Router) activeNode() (ProviderNode, error) {
 	return node, nil
 }
 
+func (r *Router) QueueCreateTask(listID string, task provider.Task) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueCreateTask(listID, task)
+}
+
 func (r *Router) QueueTaskUpdate(taskID string, update provider.TaskUpdate) error {
 	node, err := r.activeNode()
 	if err != nil {
 		return err
 	}
 	return node.engine.QueueTaskUpdate(taskID, update)
+}
+
+func (r *Router) QueueDeleteTask(taskID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueDeleteTask(taskID)
+}
+
+func (r *Router) QueueCreateList(spaceID string, name string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueCreateList(spaceID, name)
+}
+
+func (r *Router) QueueUpdateList(listID string, name string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueUpdateList(listID, name)
+}
+
+func (r *Router) QueueDeleteList(listID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueDeleteList(listID)
+}
+
+func (r *Router) QueueCreateComment(taskID string, text string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueCreateComment(taskID, text)
+}
+
+func (r *Router) QueueUpdateComment(commentID string, text string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueUpdateComment(commentID, text)
+}
+
+func (r *Router) QueueDeleteComment(commentID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueDeleteComment(commentID)
 }
 
 func (r *Router) GetCurrentUser(ctx context.Context) (provider.User, error) {

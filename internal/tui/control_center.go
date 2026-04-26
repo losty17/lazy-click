@@ -327,8 +327,12 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "home / end", Subtitle: "Jump to top/bottom", Badge: "keys"},
 		{Kind: "help", Title: "tab / shift+tab", Subtitle: "Cycle active pane", Badge: "keys"},
 		{Kind: "help", Title: "q / ctrl+c", Subtitle: "Quit", Badge: "keys"},
-		{Kind: "help", Title: "i", Subtitle: "Edit selected task", Badge: "keys"},
-		{Kind: "help", Title: "c", Subtitle: "Add comment to selected task", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.CreateTask, Subtitle: "Create new task", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.DeleteTask, Subtitle: "Delete selected task", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.CreateList, Subtitle: "Create new list", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.DeleteList, Subtitle: "Delete selected list", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.Edit, Subtitle: "Edit selected task", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.AddComment, Subtitle: "Add comment to selected task", Badge: "keys"},
 		{Kind: "help", Title: "f / F", Subtitle: "Cycle status filter", Badge: "keys"},
 		{Kind: "help", Title: "r", Subtitle: "Refresh data from cache", Badge: "keys"},
 		{Kind: "help", Title: "s", Subtitle: "Sync with provider", Badge: "keys"},
@@ -344,7 +348,9 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "m", Subtitle: "Toggle Me Mode", Badge: "keys"},
 		{Kind: "help", Title: "a", Subtitle: "Download all attachments", Badge: "keys"},
 		{Kind: "help", Title: "A", Subtitle: "Download and open attachments", Badge: "keys"},
-		{Kind: "help", Title: "ctrl+shift+c", Subtitle: "Copy task link", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.CopyTaskLink, Subtitle: "Copy task link to clipboard", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.RefreshTask, Subtitle: "Force refresh task from provider", Badge: "keys"},
+		{Kind: "help", Title: m.keymap.CollapseAll, Subtitle: "Toggle collapse all groups", Badge: "keys"},
 	}
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
@@ -472,8 +478,72 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 	m.recordCommand(id)
 	switch id {
 	case "quit":
+		if m.hasUnsavedChanges() {
+			_, cmd := m.openConfirm("Changes not saved will be lost. Quit anyway?", "QUIT", func() tea.Cmd {
+				m.persistSessionSnapshot()
+				return tea.Quit
+			})
+			return cmd
+		}
 		m.persistSessionSnapshot()
 		return tea.Quit
+	case "create_task":
+		if m.selectedListID != "" {
+			_, cmd := m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:")
+			return cmd
+		}
+		m.statusLine = "No list selected"
+		return nil
+	case "delete_task":
+		row, ok := m.taskTable.Selected()
+		if ok && row.ID != "" {
+			_, cmd := m.openConfirm("Delete task: "+row.Title+"?", "DELETE", func() tea.Cmd {
+				return m.deleteTaskCmd(row.ID)
+			})
+			return cmd
+		}
+		m.statusLine = "No task selected"
+		return nil
+	case "edit_task":
+		row, ok := m.taskTable.Selected()
+		if ok && row.ID != "" {
+			_, cmd := m.openEditor(EditorTargetTaskTitle, row.Title, "Edit Task title:")
+			return cmd
+		}
+		m.statusLine = "No task selected"
+		return nil
+	case "create_list":
+		list, _ := m.repo.GetListByID(m.selectedListID)
+		spaceID := ""
+		if list != nil {
+			spaceID = list.SpaceID
+		}
+		if spaceID != "" {
+			_, cmd := m.openEditor(EditorTargetListCreate, "", "Create new List name:")
+			return cmd
+		}
+		m.statusLine = "Could not determine space"
+		return nil
+	case "delete_list":
+		if m.selectedListID != "" {
+			list, _ := m.repo.GetListByID(m.selectedListID)
+			if list != nil {
+				_, cmd := m.openConfirm("Delete list: "+list.Name+"?", "DELETE", func() tea.Cmd {
+					return m.deleteListCmd(list.ID)
+				})
+				return cmd
+			}
+		}
+		m.statusLine = "No list selected"
+		return nil
+	case "add_comment":
+		row, ok := m.taskTable.Selected()
+		if ok && row.ID != "" {
+			_, cmd := m.openEditor(EditorTargetCommentCreate, "", "Add Comment:")
+			return cmd
+		}
+		m.statusLine = "No task selected"
+		return nil
 	case "refresh":
 		m.statusLine = "Refreshing data"
 		m.persistSessionSnapshot()
@@ -585,6 +655,12 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 func (m *RootModel) controlCommands() []controlCommand {
 	commands := []controlCommand{
 		{ID: "quit", Title: "Quit app", Subtitle: "Exit lazy-click", Badge: "system", Aliases: []string{"quit", "exit", "q"}, Shortcut: "q"},
+		{ID: "create_task", Title: "Create Task", Subtitle: "Create a new task in the current list", Badge: "task", Aliases: []string{"new task", "create task", "add task"}, Shortcut: m.keymap.CreateTask},
+		{ID: "delete_task", Title: "Delete Task", Subtitle: "Delete the selected task", Badge: "task", Aliases: []string{"remove task", "delete task", "rm task"}, Shortcut: m.keymap.DeleteTask},
+		{ID: "edit_task", Title: "Edit Task Title", Subtitle: "Rename the selected task", Badge: "task", Aliases: []string{"rename task", "edit task"}, Shortcut: m.keymap.Edit},
+		{ID: "create_list", Title: "Create List", Subtitle: "Create a new list in the current space", Badge: "list", Aliases: []string{"new list", "create list", "add list"}, Shortcut: m.keymap.CreateList},
+		{ID: "delete_list", Title: "Delete List", Subtitle: "Delete the selected list", Badge: "list", Aliases: []string{"remove list", "delete list", "rm list"}, Shortcut: m.keymap.DeleteList},
+		{ID: "add_comment", Title: "Add Comment", Subtitle: "Post a comment to the selected task", Badge: "comment", Aliases: []string{"post comment", "add comment", "new comment"}, Shortcut: m.keymap.AddComment},
 		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}, Shortcut: "r"},
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}, Shortcut: "s"},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},

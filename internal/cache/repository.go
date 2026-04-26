@@ -42,10 +42,7 @@ func (r *Repository) SaveLists(lists []ListEntity) error {
 	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		for _, list := range lists {
-			if err := tx.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "id"}},
-				DoUpdates: clause.AssignmentColumns([]string{"provider", "external_id", "space_id", "name"}),
-			}).Create(&list).Error; err != nil {
+			if err := tx.Save(&list).Error; err != nil {
 				return err
 			}
 		}
@@ -71,7 +68,7 @@ func (r *Repository) SaveTasks(tasks []TaskEntity) error {
 				"title", "status", "status_color", "priority_key", "priority_label",
 				"priority_rank", "priority_color", "estimate_ms", "due_at_unix_ms",
 				"assignees_json", "custom_fields_json", "updated_at_unix", "last_fetched_unix",
-				"updated_at",
+				"updated_at", "sync_state", "last_error",
 			}
 
 			// Only update description/attachments if the incoming task has them.
@@ -237,6 +234,36 @@ func (r *Repository) DeleteCommentByID(commentID string) error {
 	return r.db.Delete(&CommentEntity{}, "id = ?", commentID).Error
 }
 
+func (r *Repository) DeleteTaskByID(taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&TaskEntity{}, "id = ?", taskID).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&TaskListJoinEntity{}, "task_id = ?", taskID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
+func (r *Repository) DeleteListByID(listID string) error {
+	if listID == "" {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&ListEntity{}, "id = ?", listID).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&TaskListJoinEntity{}, "list_id = ?", listID).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 func MarshalPayload(v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -245,9 +272,140 @@ func MarshalPayload(v any) (string, error) {
 	return string(b), nil
 }
 
+func (r *Repository) UpdateTaskSyncState(id string, state string, errMessage string) error {
+	return r.db.Model(&TaskEntity{}).Where("id = ?", id).Updates(map[string]any{
+		"sync_state": state,
+		"last_error": errMessage,
+		"updated_at": time.Now(),
+	}).Error
+}
+
 func (r *Repository) UpdateTaskTitle(taskID string, title string) error {
 	return r.db.Model(&TaskEntity{}).Where("id = ?", taskID).Updates(map[string]any{
 		"title":           title,
 		"updated_at_unix": time.Now().UnixMilli(),
 	}).Error
+}
+
+func (r *Repository) UpdateTaskStatus(taskID string, status string) error {
+	return r.db.Model(&TaskEntity{}).Where("id = ?", taskID).Updates(map[string]any{
+		"status":          status,
+		"updated_at_unix": time.Now().UnixMilli(),
+	}).Error
+}
+
+func (r *Repository) UpdateTaskDescription(taskID string, description string) error {
+	return r.db.Model(&TaskEntity{}).Where("id = ?", taskID).Updates(map[string]any{
+		"description_md":  description,
+		"updated_at_unix": time.Now().UnixMilli(),
+	}).Error
+}
+
+func (r *Repository) UpdateListSyncState(id string, state string, errMessage string) error {
+	return r.db.Model(&ListEntity{}).Where("id = ?", id).Updates(map[string]any{
+		"sync_state": state,
+		"last_error": errMessage,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+func (r *Repository) UpdateCommentSyncState(id string, state string, errMessage string) error {
+	return r.db.Model(&CommentEntity{}).Where("id = ?", id).Updates(map[string]any{
+		"sync_state": state,
+		"last_error": errMessage,
+		"updated_at": time.Now(),
+	}).Error
+}
+
+func (r *Repository) RemapEntityID(oldID string, newID string, entityType string) error {
+	if oldID == newID {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Generic: update all pending sync queue payloads that might reference this ID
+		if err := tx.Exec("UPDATE sync_queue_entities SET payload_json = REPLACE(payload_json, ?, ?) WHERE state = 'pending'", oldID, newID).Error; err != nil {
+			return err
+		}
+
+		switch entityType {
+		case "task":
+			// 1. Move references
+			if err := tx.Exec("UPDATE task_list_join_entities SET task_id = ? WHERE task_id = ?", newID, oldID).Error; err != nil {
+				// Ignore unique constraint errors here (if task already joined to that list)
+			}
+			if err := tx.Exec("UPDATE comment_entities SET task_id = ? WHERE task_id = ?", newID, oldID).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("UPDATE attachment_entities SET task_id = ? WHERE task_id = ?", newID, oldID).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("UPDATE sync_queue_entities SET entity_id = ? WHERE entity_id = ? AND entity_type = 'task'", newID, oldID).Error; err != nil {
+				return err
+			}
+			// 2. Handle main entity
+			var count int64
+			tx.Table("task_entities").Where("id = ?", newID).Count(&count)
+			if count > 0 {
+				if err := tx.Exec("DELETE FROM task_entities WHERE id = ?", oldID).Error; err != nil {
+					return err
+				}
+				if err := tx.Exec("UPDATE task_entities SET sync_state = 'synced' WHERE id = ?", newID).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Exec("UPDATE task_entities SET id = ?, external_id = ?, sync_state = 'synced' WHERE id = ?", newID, newID, oldID).Error; err != nil {
+					return err
+				}
+			}
+
+		case "list":
+			// 1. Move references
+			if err := tx.Exec("UPDATE task_entities SET list_id = ? WHERE list_id = ?", newID, oldID).Error; err != nil {
+				return err
+			}
+			if err := tx.Exec("UPDATE task_list_join_entities SET list_id = ? WHERE list_id = ?", newID, oldID).Error; err != nil {
+				// Ignore unique constraint
+			}
+			if err := tx.Exec("UPDATE sync_queue_entities SET entity_id = ? WHERE entity_id = ? AND entity_type = 'list'", newID, oldID).Error; err != nil {
+				return err
+			}
+			// 2. Handle main entity
+			var count int64
+			tx.Table("list_entities").Where("id = ?", newID).Count(&count)
+			if count > 0 {
+				if err := tx.Exec("DELETE FROM list_entities WHERE id = ?", oldID).Error; err != nil {
+					return err
+				}
+				if err := tx.Exec("UPDATE list_entities SET sync_state = 'synced' WHERE id = ?", newID).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Exec("UPDATE list_entities SET id = ?, external_id = ?, sync_state = 'synced' WHERE id = ?", newID, newID, oldID).Error; err != nil {
+					return err
+				}
+			}
+
+		case "comment":
+			if err := tx.Exec("UPDATE sync_queue_entities SET entity_id = ? WHERE entity_id = ? AND entity_type = 'comment'", newID, oldID).Error; err != nil {
+				return err
+			}
+			var count int64
+			tx.Table("comment_entities").Where("id = ?", newID).Count(&count)
+			if count > 0 {
+				if err := tx.Exec("DELETE FROM comment_entities WHERE id = ?", oldID).Error; err != nil {
+					return err
+				}
+				if err := tx.Exec("UPDATE comment_entities SET sync_state = 'synced' WHERE id = ?", newID).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Exec("UPDATE comment_entities SET id = ?, sync_state = 'synced' WHERE id = ?", newID, oldID).Error; err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported entity type for remapping: %s", entityType)
+		}
+		return nil
+	})
 }

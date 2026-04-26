@@ -39,7 +39,7 @@ func (c *Client) GetSpaces(ctx context.Context) (*GetSpacesResponse, error) {
 
 	out := &GetSpacesResponse{}
 	for _, team := range teamsResp.Teams {
-		teamSpaces, err := c.getSpacesByTeam(ctx, team.ID)
+		teamSpaces, err := c.getSpacesByTeam(ctx, team.ID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -66,19 +66,19 @@ func (c *Client) GetLists(ctx context.Context, spaceID string) (*GetListsRespons
 
 	seen := make(map[string]struct{}, len(out.Lists))
 	for _, list := range out.Lists {
-		seen[list.ID] = struct{}{}
+		seen[list.ID.String()] = struct{}{}
 	}
 
 	for _, folder := range folders.Folders {
-		folderLists, err := c.getListsByFolder(ctx, folder.ID)
+		folderLists, err := c.getListsByFolder(ctx, folder.ID.String())
 		if err != nil {
 			return nil, err
 		}
 		for _, list := range folderLists.Lists {
-			if _, exists := seen[list.ID]; exists {
+			if _, exists := seen[list.ID.String()]; exists {
 				continue
 			}
-			seen[list.ID] = struct{}{}
+			seen[list.ID.String()] = struct{}{}
 			out.Lists = append(out.Lists, list)
 		}
 	}
@@ -165,6 +165,38 @@ func (c *Client) UpdateTask(ctx context.Context, taskID string, req UpdateTaskRe
 	return c.doJSON(ctx, http.MethodPut, "/task/"+taskID, req, nil)
 }
 
+func (c *Client) CreateTask(ctx context.Context, listID string, req CreateTaskRequest) (*TaskDTO, error) {
+	var resp TaskDTO
+	if err := c.doJSON(ctx, http.MethodPost, "/list/"+listID+"/task", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteTask(ctx context.Context, taskID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/task/"+taskID, nil, nil)
+}
+
+func (c *Client) CreateList(ctx context.Context, spaceID string, req CreateListRequest) (*ListDTO, error) {
+	var resp ListDTO
+	if err := c.doJSON(ctx, http.MethodPost, "/space/"+spaceID+"/list", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) UpdateList(ctx context.Context, listID string, req UpdateListRequest) (*ListDTO, error) {
+	var resp ListDTO
+	if err := c.doJSON(ctx, http.MethodPut, "/list/"+listID, req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteList(ctx context.Context, listID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/list/"+listID, nil, nil)
+}
+
 func (c *Client) AddComment(ctx context.Context, taskID string, text string) (*AddCommentResponse, error) {
 	body := AddCommentRequest{CommentText: text, NotifyAll: true}
 	var resp AddCommentResponse
@@ -172,6 +204,15 @@ func (c *Client) AddComment(ctx context.Context, taskID string, text string) (*A
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *Client) UpdateComment(ctx context.Context, commentID string, text string) error {
+	body := AddCommentRequest{CommentText: text}
+	return c.doJSON(ctx, http.MethodPut, "/comment/"+commentID, body, nil)
+}
+
+func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/comment/"+commentID, nil, nil)
 }
 
 func (c *Client) getTeams(ctx context.Context) (*GetTeamsResponse, error) {

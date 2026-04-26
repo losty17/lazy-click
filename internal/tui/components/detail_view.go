@@ -4,162 +4,417 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
+type DetailField struct {
+	Key       string
+	Label     string
+	Value     string
+	Editable  bool
+	MultiLine bool
+}
+
+type DetailMode int
+
+const (
+	ModeNormal DetailMode = iota // This is "FIELD" label
+	ModeInsert
+	ModeVisual
+)
+
 type DetailModel struct {
-	sections []string
-	idx      int
-	x        int
+	Fields       []DetailField
+	Cursor       int
+	Scroll       int
+	Mode         DetailMode
+	Editor       TextEditorModel
+	VisualOffset int // Character offset within the current multi-line field
+	width        int
+	height       int
 }
 
 func NewDetail() DetailModel {
 	return DetailModel{
-		sections: []string{
-			"Description (markdown rendering planned)",
-			"Comments (threaded view planned)",
-			"Metadata (status/dates editing planned)",
+		Fields: []DetailField{
+			{Key: "title", Label: "Title", Editable: true},
+			{Key: "status", Label: "Status", Editable: true},
+			{Key: "priority", Label: "Priority", Editable: true},
+			{Key: "description", Label: "Description", Editable: true, MultiLine: true},
 		},
+		Mode: ModeNormal,
 	}
 }
 
-func (m *DetailModel) Move(delta int) {
-	next := max(m.idx+delta, 0)
-	m.idx = next
+type FieldUpdateMsg struct {
+	Key   string
+	Value string
 }
 
-func (m *DetailModel) SetSections(sections []string) {
-	if len(sections) == 0 {
-		m.sections = []string{"No task selected"}
-		m.idx = 0
-		return
-	}
-	m.sections = sections
-	if m.idx >= len(m.sections) {
-		m.idx = len(m.sections) - 1
-	}
-	if m.idx < 0 {
-		m.idx = 0
+func (m *DetailModel) SetFields(fields []DetailField) {
+	m.Fields = fields
+	if m.Cursor >= len(m.Fields) {
+		m.Cursor = max(0, len(m.Fields)-1)
 	}
 }
 
-func (m *DetailModel) MoveHorizontal(delta int) {
-	next := max(m.x+delta, 0)
-	m.x = next
-}
-
-func (m *DetailModel) MoveToTop() {
-	m.idx = 0
-}
-
-func (m *DetailModel) MoveToBottom() {
-	m.idx = len(m.sections)
-	if m.idx < 0 {
-		m.idx = 0
+func (m DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		if m.Mode == ModeInsert {
+			m.Editor.Width = m.width - 2
+		}
 	}
+
+	if m.Mode == ModeInsert {
+		var cmd tea.Cmd
+		m.Editor, cmd = m.Editor.Update(msg)
+		return m, cmd
+	}
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "h", "left":
+			if m.Mode == ModeVisual {
+				if m.VisualOffset > 0 {
+					m.VisualOffset--
+				}
+			}
+		case "l", "right":
+			if m.Mode == ModeVisual {
+				if m.VisualOffset < len(m.Fields[m.Cursor].Value)-1 {
+					m.VisualOffset++
+				}
+			}
+		case "j", "down":
+			if m.Mode == ModeVisual {
+				val := m.Fields[m.Cursor].Value
+				line, col := findLineOfOffset(val, m.VisualOffset, m.width)
+				numLines, _ := findLineOfOffset(val, len(val), m.width)
+				if line < numLines {
+					m.VisualOffset = findOffsetAtCoords(val, line+1, col, m.width)
+				} else {
+					// Move to next field
+					if m.Cursor < len(m.Fields)-1 {
+						m.Cursor++
+						m.VisualOffset = 0
+						if !m.Fields[m.Cursor].MultiLine {
+							m.Mode = ModeNormal
+						}
+					}
+				}
+			} else {
+				if m.Cursor < len(m.Fields)-1 {
+					m.Cursor++
+					if m.Fields[m.Cursor].MultiLine {
+						m.Mode = ModeVisual
+						m.VisualOffset = 0
+					}
+				}
+			}
+		case "k", "up":
+			if m.Mode == ModeVisual {
+				val := m.Fields[m.Cursor].Value
+				line, col := findLineOfOffset(val, m.VisualOffset, m.width)
+				if line > 0 {
+					m.VisualOffset = findOffsetAtCoords(val, line-1, col, m.width)
+				} else {
+					// Move to previous field
+					if m.Cursor > 0 {
+						m.Cursor--
+						if m.Fields[m.Cursor].MultiLine {
+							m.Mode = ModeVisual
+							m.VisualOffset = len(m.Fields[m.Cursor].Value) - 1
+							if m.VisualOffset < 0 {
+								m.VisualOffset = 0
+							}
+						} else {
+							m.Mode = ModeNormal
+						}
+					}
+				}
+			} else {
+				if m.Cursor > 0 {
+					m.Cursor--
+					if m.Fields[m.Cursor].MultiLine {
+						m.Mode = ModeVisual
+						m.VisualOffset = len(m.Fields[m.Cursor].Value) - 1
+						if m.VisualOffset < 0 {
+							m.VisualOffset = 0
+						}
+					}
+				}
+			}
+		case "i", "enter":
+			if m.Cursor < len(m.Fields) && m.Fields[m.Cursor].Editable {
+				field := m.Fields[m.Cursor]
+				m.Mode = ModeInsert
+				m.Editor = NewTextEditor(field.Label)
+				m.Editor.Value = field.Value
+				m.Editor.Cursor = len(m.Editor.Value)
+				m.Editor.Active = true
+				m.Editor.MultiLine = field.MultiLine
+				m.Editor.Mode = VimModeInsert
+				m.Editor.Width = m.width - 2
+				
+				m.Editor.OnSubmit = func(value string) tea.Cmd {
+					return func() tea.Msg {
+						return FieldUpdateMsg{Key: field.Key, Value: value}
+					}
+				}
+				m.Editor.OnCancel = func() tea.Cmd {
+					return func() tea.Msg {
+						return CancelFieldEditMsg{}
+					}
+				}
+			}
+		case "esc":
+			if m.Mode == ModeVisual {
+				m.Mode = ModeNormal
+				m.VisualOffset = 0
+			}
+		}
+	}
+
+	return m, nil
 }
+
+func findOffsetAtCoords(s string, targetLine int, targetCol int, width int) int {
+	currOffset := 0
+	currLine := 0
+	
+	parts := strings.Split(s, "\n")
+	for _, part := range parts {
+		wrapped := breakLines(part, width)
+		if currLine+len(wrapped) > targetLine {
+			// Target is within this part
+			subLine := targetLine - currLine
+			acc := 0
+			for i, w := range wrapped {
+				if i == subLine {
+					// We are on the target wrapped line. 
+					// Find character at targetCol
+					runes := []rune(w)
+					if targetCol >= len(runes) {
+						if len(runes) > 0 {
+							return currOffset + acc + len(string(runes[:len(runes)-1]))
+						}
+						return currOffset + acc
+					}
+					return currOffset + acc + len(string(runes[:targetCol]))
+				}
+				acc += len(w)
+			}
+		}
+		currOffset += len(part) + 1
+		currLine += len(wrapped)
+	}
+	return len(s)
+}
+
+func (m DetailModel) countFieldLines(idx int, width int) int {
+	if idx < 0 || idx >= len(m.Fields) {
+		return 0
+	}
+	field := m.Fields[idx]
+	if !field.MultiLine {
+		return 1
+	}
+	
+	val := strings.ReplaceAll(field.Value, "\r\n", "\n")
+	val = strings.ReplaceAll(val, "\r", "\n")
+	parts := strings.Split(val, "\n")
+	
+	count := 1 // Label line
+	for _, part := range parts {
+		count += len(breakLines(part, width))
+	}
+	return count
+}
+
+type CancelFieldEditMsg struct{}
 
 func (m *DetailModel) Render(active bool, width int, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
+	m.width = width
+	m.height = height
 
-	// Detail renders as a title row plus a vertically scrollable text body.
-	title := "Detail"
-	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	_ = active
-	lines := []string{titleStyle.Render(Truncate(title, width, "..."))}
-
-	// Expand logical sections into one flat list of renderable lines.
-	bodyLines := m.expandedLines(width)
-
-	bodySize := max(height-1, 0)
-
-	// Clamp vertical scroll
-	maxStart := max(len(bodyLines)-bodySize, 0)
-	if m.idx > maxStart {
-		m.idx = maxStart
-	}
-	if m.idx < 0 {
-		m.idx = 0
-	}
-	start := m.idx
-
-	// Find max line width for horizontal clamping
-	maxLineWidth := 0
-	for _, l := range bodyLines {
-		dw := DisplayWidth(l)
-		if dw > maxLineWidth {
-			maxLineWidth = dw
+	headerStyle := lipgloss.NewStyle().Bold(true).Padding(0, 1)
+	modeStr := " FIELD "
+	if m.Mode == ModeNormal {
+		headerStyle = headerStyle.Background(lipgloss.Color("42")).Foreground(lipgloss.Color("0"))
+	} else if m.Mode == ModeVisual {
+		modeStr = " VISUAL "
+		headerStyle = headerStyle.Background(lipgloss.Color("214")).Foreground(lipgloss.Color("0"))
+	} else {
+		if m.Editor.Mode == VimModeInsert {
+			modeStr = " INSERT "
+			headerStyle = headerStyle.Background(lipgloss.Color("13")).Foreground(lipgloss.Color("0"))
+		} else {
+			modeStr = " NORMAL "
+			headerStyle = headerStyle.Background(lipgloss.Color("62")).Foreground(lipgloss.Color("255"))
 		}
 	}
-	maxHorizontal := max(maxLineWidth-width, 0)
-	if m.x > maxHorizontal {
-		m.x = maxHorizontal
-	}
-	if m.x < 0 {
-		m.x = 0
-	}
+	
+	header := headerStyle.Render(modeStr) + " " + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75")).Render("Detail")
+	lines := []string{header}
 
-	end := min(start+bodySize, len(bodyLines))
+	contentHeight := height - 1
+	var bodyLines []string
+	fieldStartLines := make([]int, len(m.Fields))
+	fieldEndLines := make([]int, len(m.Fields))
+	cursorLineOffset := 0
 
-	for i := start; i < end; i++ {
-		line := bodyLines[i]
-		if strings.Contains(line, "\x1b") {
-			// Don't truncate or scroll lines with escape sequences (Kitty images)
-			lines = append(lines, line)
-			continue
+	visualCursorStyle := lipgloss.NewStyle().Background(lipgloss.Color("255")).Foreground(lipgloss.Color("0"))
+
+	for i, field := range m.Fields {
+		fieldStartLines[i] = len(bodyLines)
+		labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		
+		if active && i == m.Cursor {
+			labelStyle = labelStyle.Foreground(lipgloss.Color("12")).Bold(true)
 		}
-		// Apply horizontal scrolling offset m.x
-		if m.x > 0 {
-			if m.x < len(line) {
-				line = line[m.x:]
+
+		label := labelStyle.Render(field.Label + ":")
+		
+		if m.Mode == ModeInsert && i == m.Cursor {
+			bodyLines = append(bodyLines, label)
+			
+			// Value with cursor visualization
+			valWithCursor := m.Editor.Render(width)
+			
+			// Handle newlines in the value and wrap them
+			val := strings.ReplaceAll(valWithCursor, "\r\n", "\n")
+			val = strings.ReplaceAll(val, "\r", "\n")
+			parts := strings.Split(val, "\n")
+			
+			editorValueStyle := lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.Color("62")).
+				PaddingLeft(1)
+
+			// Find which line the cursor is on for scrolling
+			rawVal := m.Editor.Value
+			cursorPos := m.Editor.Cursor
+			targetWrappedLineIdx, _ := findLineOfOffset(rawVal, cursorPos, width-2)
+
+			currentWrappedLineCounter := 0
+			for _, part := range parts {
+				wrapped := breakLines(part, width-2)
+				for _, wLine := range wrapped {
+					if currentWrappedLineCounter == targetWrappedLineIdx { 
+						cursorLineOffset = len(bodyLines) - fieldStartLines[i]
+					}
+					bodyLines = append(bodyLines, editorValueStyle.Render(wLine))
+					currentWrappedLineCounter++
+				}
+			}
+		} else {
+			valStyle := lipgloss.NewStyle()
+			
+			if field.MultiLine {
+				bodyLines = append(bodyLines, label)
+				
+				val := field.Value
+				cursorPartIdx := -1
+				cursorLineInPartIdx := -1
+				cursorColInLineIdx := -1
+				
+				if m.Mode == ModeVisual && i == m.Cursor {
+					cursorLine, cursorCol := findLineOfOffset(val, m.VisualOffset, width)
+					cursorLineOffset = cursorLine + 1 // +1 because of the label line
+					
+					// We need to find which part and which wrapped line it is
+					parts := strings.Split(val, "\n")
+					accLines := 0
+					for pi, p := range parts {
+						w := breakLines(p, width)
+						if accLines + len(w) > cursorLine {
+							cursorPartIdx = pi
+							cursorLineInPartIdx = cursorLine - accLines
+							cursorColInLineIdx = cursorCol
+							break
+						}
+						accLines += len(w)
+					}
+				}
+
+				parts := strings.Split(val, "\n")
+				for pi, part := range parts {
+					wrapped := breakLines(part, width)
+					for li, l := range wrapped {
+						renderedLine := valStyle.Render(l)
+						if pi == cursorPartIdx && li == cursorLineInPartIdx {
+							// Apply single character cursor
+							runes := []rune(l)
+							if cursorColInLineIdx < len(runes) {
+								char := string(runes[cursorColInLineIdx])
+								renderedLine = valStyle.Render(string(runes[:cursorColInLineIdx])) + 
+									visualCursorStyle.Render(char) + 
+									valStyle.Render(string(runes[cursorColInLineIdx+1:]))
+							} else {
+								renderedLine = valStyle.Render(l) + visualCursorStyle.Render(" ")
+							}
+						}
+						bodyLines = append(bodyLines, renderedLine)
+					}
+				}
 			} else {
-				line = ""
+				value := valStyle.Render(field.Value)
+				if field.Value == "" {
+					value = lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("240")).Render("empty")
+				}
+				bodyLines = append(bodyLines, label+" "+value)
 			}
 		}
-		
-		padded := Truncate(line, width, "...")
-		dw := DisplayWidth(padded)
-		if dw < width {
-			padded += strings.Repeat(" ", width-dw)
-		}
-		lines = append(lines, padded)
+		fieldEndLines[i] = len(bodyLines) - 1
 	}
 
-	// Pad to fixed height to avoid panel jitter when content is short.
+	// Improved scroll management: ensure the selected field's relevant part is visible
+	if len(m.Fields) > 0 && m.Cursor < len(m.Fields) {
+		startLine := fieldStartLines[m.Cursor]
+		
+		targetLine := startLine
+		if m.Mode == ModeInsert || m.Mode == ModeVisual {
+			targetLine = startLine + cursorLineOffset
+		}
+
+		if targetLine < m.Scroll {
+			m.Scroll = targetLine
+		} else if targetLine >= m.Scroll+contentHeight {
+			m.Scroll = targetLine - contentHeight + 1
+		}
+		
+		// Ensure the field header is also visible if possible
+		if startLine < m.Scroll && m.Mode == ModeInsert {
+			// If we are deep in a multiline field, don't force header visibility if it hides the cursor
+		}
+	}
+
+	start := m.Scroll
+	end := min(start+contentHeight, len(bodyLines))
+	if start < 0 {
+		start = 0
+	}
+	if end > len(bodyLines) {
+		end = len(bodyLines)
+	}
+
+	for i := start; i < end; i++ {
+		lines = append(lines, Truncate(bodyLines[i], width, "..."))
+	}
+
 	for len(lines) < height {
-		lines = append(lines, strings.Repeat(" ", width))
+		lines = append(lines, "")
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-func (m DetailModel) expandedLines(width int) []string {
-	if len(m.sections) == 0 {
-		return []string{"No task selected"}
-	}
-
-	// Normalize mixed newline styles from cached markdown/comments.
-	lines := make([]string, 0, len(m.sections))
-	for _, section := range m.sections {
-		normalized := strings.ReplaceAll(section, "\r\n", "\n")
-		normalized = strings.ReplaceAll(normalized, "\r", "\n")
-
-		parts := strings.Split(normalized, "\n")
-
-		if len(parts) == 0 {
-			lines = append(lines, "")
-			continue
-		}
-
-		for _, part := range parts {
-			formattedLines := breakLines(part, width)
-			lines = append(lines, formattedLines...)
-		}
-	}
-
-	return lines
 }
 
 func breakLines(s string, width int) []string {
@@ -170,6 +425,10 @@ func breakLines(s string, width int) []string {
 	// If it's a Kitty image placement, don't wrap it.
 	if strings.Contains(s, "\x1b_G") {
 		return []string{s}
+	}
+
+	if s == "" {
+		return []string{""}
 	}
 
 	lines := []string{}
@@ -223,4 +482,40 @@ func breakLines(s string, width int) []string {
 	}
 
 	return lines
+}
+
+func findLineOfOffset(s string, offset int, width int) (lineIdx int, colIdx int) {
+	if offset <= 0 {
+		return 0, 0
+	}
+	
+	lines := 0
+	currOffset := 0
+	
+	parts := strings.Split(s, "\n")
+	for _, part := range parts {
+		if currOffset+len(part) >= offset {
+			// Found the part
+			remaining := offset - currOffset
+			// Calculate wrapped lines within this part
+			wrapped := breakLines(part, width)
+			wrappedLineIdx := 0
+			acc := 0
+			for j, w := range wrapped {
+				// Use DisplayWidth to match visual boundaries if there are ANSI chars, 
+				// but here we are using raw string 'part'
+				if acc+len(w) >= remaining {
+					wrappedLineIdx = j
+					break
+				}
+				acc += len(w)
+			}
+			return lines + wrappedLineIdx, remaining - acc
+		}
+		currOffset += len(part) + 1 // +1 for \n
+		wrapped := breakLines(part, width)
+		lines += len(wrapped)
+	}
+	
+	return lines - 1, 0
 }

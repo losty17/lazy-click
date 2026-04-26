@@ -21,6 +21,10 @@ type Keymap struct {
 	MeMode             string
 	DownloadAttachments string
 	Debug               string
+	CreateTask          string
+	DeleteTask          string
+	CreateList          string
+	DeleteList          string
 }
 
 func DefaultKeymap() Keymap {
@@ -45,5 +49,9 @@ func DefaultKeymap() Keymap {
 		MeMode:              "m",
 		DownloadAttachments: "a",
 		Debug:               "ctrl+d",
+		CreateTask:          "C",
+		DeleteTask:          "D",
+		CreateList:          "E",
+		DeleteList:          "L",
 	}
 }

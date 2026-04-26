@@ -49,7 +49,7 @@ func (r *Repository) GetSpacesByProvider(provider string) ([]SpaceEntity, error)
 
 func (r *Repository) GetListsBySpace(spaceID string) ([]ListEntity, error) {
 	var lists []ListEntity
-	err := r.db.Where("space_id = ?", spaceID).Order("name asc").Find(&lists).Error
+	err := r.db.Where("space_id = ? AND sync_state <> ?", spaceID, SyncStatePendingDelete).Order("name asc").Find(&lists).Error
 	return lists, err
 }
 
@@ -59,7 +59,7 @@ func (r *Repository) GetAllLists() ([]ListEntity, error) {
 
 func (r *Repository) GetListsByQuery(q ListQuery) ([]ListEntity, error) {
 	var lists []ListEntity
-	stmt := r.db.Model(&ListEntity{})
+	stmt := r.db.Model(&ListEntity{}).Where("sync_state <> ?", SyncStatePendingDelete)
 	if q.Provider != "" {
 		stmt = stmt.Where("provider = ?", q.Provider)
 	}
@@ -81,7 +81,7 @@ func (r *Repository) GetListsByQuery(q ListQuery) ([]ListEntity, error) {
 func (r *Repository) GetMostRecentlyOpenedListID() (string, error) {
 	var list ListEntity
 	err := r.db.Model(&ListEntity{}).
-		Where("last_opened_unix > 0").
+		Where("last_opened_unix > 0 AND sync_state <> ?", SyncStatePendingDelete).
 		Order("last_opened_unix desc").
 		Limit(1).
 		First(&list).Error
@@ -95,7 +95,7 @@ func (r *Repository) GetMostRecentlyOpenedListID() (string, error) {
 }
 
 func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {
-	stmt := r.db.Model(&TaskEntity{})
+	stmt := r.db.Model(&TaskEntity{}).Where("task_entities.sync_state <> ?", SyncStatePendingDelete)
 	if listID != "" {
 		stmt = stmt.Joins("JOIN task_list_join_entities ON task_list_join_entities.task_id = task_entities.id").
 			Where("task_list_join_entities.list_id = ?", listID)
@@ -106,7 +106,7 @@ func (r *Repository) GetTaskStatusesByList(listID string) ([]string, error) {
 }
 
 func (r *Repository) GetTasksByQuery(q TaskListQuery) ([]TaskEntity, error) {
-	stmt := r.db.Model(&TaskEntity{})
+	stmt := r.db.Model(&TaskEntity{}).Where("task_entities.sync_state <> ?", SyncStatePendingDelete)
 	if q.Provider != "" {
 		stmt = stmt.Where("task_entities.provider = ?", q.Provider)
 	}
@@ -152,7 +152,7 @@ func (r *Repository) GetTaskByID(taskID string) (*TaskEntity, error) {
 }
 
 func (r *Repository) GetTaskComments(taskID string, limit int) ([]CommentEntity, error) {
-	stmt := r.db.Where("task_id = ?", taskID).Order("created_at_unix asc")
+	stmt := r.db.Where("task_id = ? AND sync_state <> ?", taskID, SyncStatePendingDelete).Order("created_at_unix asc")
 	if limit > 0 {
 		stmt = stmt.Limit(limit)
 	}

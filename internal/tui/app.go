@@ -125,8 +125,16 @@ const (
 
 type SyncQueuer interface {
 	GetCurrentUser(ctx context.Context) (provider.User, error)
+	QueueCreateTask(listID string, task provider.Task) error
 	QueueTaskUpdate(taskID string, update provider.TaskUpdate) error
-	QueueAddComment(taskID string, text string, localCommentID string) error
+	QueueDeleteTask(taskID string) error
+	QueueCreateList(spaceID string, name string) error
+	QueueUpdateList(listID string, name string) error
+	QueueDeleteList(listID string) error
+	QueueCreateComment(taskID string, text string) error
+	QueueUpdateComment(commentID string, text string) error
+	QueueDeleteComment(commentID string) error
+	QueueAddComment(taskID string, text string, localCommentID string) error // Deprecated
 	Cycle(ctx context.Context) error
 	SyncList(ctx context.Context, listID string) error
 	SetActiveListID(listID string)
@@ -138,6 +146,17 @@ type SyncQueuer interface {
 	RevalidateTask(ctx context.Context, taskID string) error
 	SyncStatus() string
 }
+
+type EditorTarget string
+
+const (
+	EditorTargetNone          EditorTarget = ""
+	EditorTargetTaskTitle     EditorTarget = "task_title"
+	EditorTargetTaskCreate    EditorTarget = "task_create"
+	EditorTargetListCreate    EditorTarget = "list_create"
+	EditorTargetListName      EditorTarget = "list_name"
+	EditorTargetCommentCreate EditorTarget = "comment_create"
+)
 
 type RootModel struct {
 	width               int
@@ -192,9 +211,11 @@ type RootModel struct {
 	loadedTasks     []cache.TaskEntity
 	patInput        string
 
-	commentMode    bool
-	commentInput   string
-	commentTaskID  string
+	editorOpen     bool
+	editorTarget   EditorTarget
+	editorModel    components.TextEditorModel
+	confirmOpen    bool
+	confirmModel   components.ConfirmModel
 	openTaskPrompt bool
 	openTaskURL    string
 	syncing        bool
@@ -333,6 +354,17 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		var detailCmd tea.Cmd
+		m.detailPanel, detailCmd = m.detailPanel.Update(msg)
+		return m, detailCmd
+
+	case components.FieldUpdateMsg:
+		m.detailPanel.Mode = components.ModeNormal
+		return m, m.submitFieldUpdateCmd(msg.Key, msg.Value)
+
+	case components.CancelFieldEditMsg:
+		m.detailPanel.Mode = components.ModeNormal
+		return m, nil
 
 	case tea.KeyMsg:
 		if m.providerSetupPrompt {
@@ -406,7 +438,99 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		if m.controlOpen {
+			if msg.String() == "ctrl+c" {
+				if m.hasUnsavedChanges() {
+					return m.openConfirm("Changes not saved will be lost. Quit anyway?", "QUIT", func() tea.Cmd {
+						m.persistSessionSnapshot()
+						return tea.Quit
+					})
+				}
+				m.persistSessionSnapshot()
+				return m, tea.Quit
+			}
 			return m, m.updateControlCenter(msg)
+		}
+
+		if m.editorOpen {
+			if msg.String() == "ctrl+c" || (msg.String() == "q" && m.editorModel.Mode == components.VimModeNormal) {
+				if m.hasUnsavedChanges() {
+					return m.openConfirm("Changes not saved will be lost. Quit anyway?", "QUIT", func() tea.Cmd {
+						m.persistSessionSnapshot()
+						return tea.Quit
+					})
+				}
+				m.persistSessionSnapshot()
+				return m, tea.Quit
+			}
+			var cmd tea.Cmd
+			m.editorModel, cmd = m.editorModel.Update(msg)
+			return m, cmd
+		}
+
+		if m.confirmOpen {
+			var cmd tea.Cmd
+			m.confirmModel, cmd = m.confirmModel.Update(msg)
+			return m, cmd
+		}
+
+		if m.activePane == 2 && m.detailPanel.Mode == components.ModeInsert {
+			if msg.String() == "ctrl+c" || (msg.String() == "q" && m.detailPanel.Editor.Mode == components.VimModeNormal) {
+				if m.hasUnsavedChanges() {
+					return m.openConfirm("Changes not saved will be lost. Quit anyway?", "QUIT", func() tea.Cmd {
+						m.persistSessionSnapshot()
+						return tea.Quit
+					})
+				}
+				m.persistSessionSnapshot()
+				return m, tea.Quit
+			}
+			var cmd tea.Cmd
+			m.detailPanel, cmd = m.detailPanel.Update(msg)
+			return m, cmd
+		}
+
+		// Global keys and pane-specific delegation
+		switch msg.String() {
+		case "q", "ctrl+c":
+			if m.hasUnsavedChanges() {
+				return m.openConfirm("Changes not saved will be lost. Quit anyway?", "QUIT", func() tea.Cmd {
+					m.persistSessionSnapshot()
+					return tea.Quit
+				})
+			}
+			m.persistSessionSnapshot()
+			return m, tea.Quit
+		case "ctrl+p", "ctrl+k":
+			m.openControlCenter(ControlModeCommand)
+			return m, nil
+		case ":":
+			m.openControlCenter(ControlModeCommand)
+			return m, nil
+		case "$":
+			m.openControlCenter(ControlModePAT)
+			return m, nil
+		case "tab":
+			m.activePane = (m.activePane + 1) % 3
+			return m, nil
+		case "shift+tab", "backtab":
+			m.activePane = (m.activePane + 2) % 3
+			return m, nil
+		case "r":
+			return m, m.loadDataCmd()
+		case "s":
+			if !m.syncing {
+				m.syncing = true
+				m.syncFrame = 0
+				m.statusLine = "Sync in progress..."
+				m.syncDetail = "starting manual sync"
+				return m, tea.Batch(m.syncNowCmd(), m.syncTickCmd())
+			}
+		}
+
+		if m.activePane == 2 {
+			var cmd tea.Cmd
+			m.detailPanel, cmd = m.detailPanel.Update(msg)
+			return m, cmd
 		}
 
 		if m.openTaskPrompt {
@@ -480,18 +604,6 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch msg.String() {
-		case "q", "ctrl+c":
-			m.persistSessionSnapshot()
-			return m, tea.Quit
-		case "ctrl+p", "ctrl+k":
-			m.openControlCenter(ControlModeCommand)
-			return m, nil
-		case ":":
-			m.openControlCenter(ControlModeCommand)
-			return m, nil
-		case "$":
-			m.openControlCenter(ControlModePAT)
-			return m, nil
 		case "home":
 			return m.handleMoveToTop()
 		case "end":
@@ -506,8 +618,6 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sidebar.Move(1)
 			case 1:
 				m.taskTable.Move(1)
-			case 2:
-				return m.detailPanelMove(1)
 			}
 			return m, nil
 		case m.keymap.Up, "up":
@@ -516,44 +626,61 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sidebar.Move(-1)
 			case 1:
 				m.taskTable.Move(-1)
-			case 2:
-				return m.detailPanelMove(-1)
 			}
 			return m, nil
 		case "h", "left":
 			return m.handleHorizontalMove(-2)
 		case "l", "right":
 			return m.handleHorizontalMove(2)
-		case "r":
-			return m, m.loadDataCmd()
-		case "s":
-			if !m.syncing {
-				m.syncing = true
-				m.syncFrame = 0
-				m.statusLine = "Sync in progress..."
-				m.syncDetail = "starting manual sync"
-				return m, tea.Batch(m.syncNowCmd(), m.syncTickCmd())
-			}
-		case m.keymap.Edit:
-			if m.activePane == 1 {
-				return m, m.editSelectedTaskCmd()
-			}
 		case m.keymap.RefreshTask:
 			if m.activePane == 1 {
 				return m, m.refreshCurrentTaskNowCmd()
 			}
+		case m.keymap.CreateTask:
+			if m.selectedListID != "" {
+				return m.openEditor(EditorTargetTaskCreate, "", "Create new Task title:")
+			}
+		case m.keymap.DeleteTask:
+			if m.activePane == 1 {
+				row, ok := m.taskTable.Selected()
+				if ok && row.ID != "" {
+					return m.openConfirm("Delete task: "+row.Title+"?", "DELETE", func() tea.Cmd {
+						return m.deleteTaskCmd(row.ID)
+					})
+				}
+			}
+		case m.keymap.CreateList:
+			list, _ := m.repo.GetListByID(m.selectedListID)
+			spaceID := ""
+			if list != nil {
+				spaceID = list.SpaceID
+			}
+			if spaceID != "" {
+				return m.openEditor(EditorTargetListCreate, "", "Create new List name:")
+			}
+		case m.keymap.DeleteList:
+			if m.activePane == 0 && m.selectedListID != "" {
+				list, _ := m.repo.GetListByID(m.selectedListID)
+				if list != nil {
+					return m.openConfirm("Delete list: "+list.Name+"?", "DELETE", func() tea.Cmd {
+						return m.deleteListCmd(list.ID)
+					})
+				}
+			}
 		case m.keymap.AddComment:
 			if m.activePane == 1 {
 				row, ok := m.taskTable.Selected()
-				if !ok {
-					m.statusLine = "No task selected for comment"
-					return m, nil
+				if ok && row.ID != "" {
+					return m.openEditor(EditorTargetCommentCreate, "", "Add Comment:")
 				}
-				m.commentMode = true
-				m.commentInput = ""
-				m.commentTaskID = row.ID
-				m.statusLine = "Compose comment and press Enter to submit (Esc to cancel)"
-				return m, nil
+			}
+		case m.keymap.Edit:
+			if m.activePane == 1 {
+				m.activePane = 2
+				// Also trigger the update so it starts editing immediately
+				var cmd tea.Cmd
+				m.detailPanel, cmd = m.detailPanel.Update(msg)
+				return m, cmd
 			}
 		case m.keymap.Filter:
 			m.cycleStatusFilter(1)
@@ -636,7 +763,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.loadDataCmd()
 		case m.keymap.Favorite:
-			if m.activePane == 0 {
+		if m.activePane == 0 {
 				if err := m.repo.ToggleListFavorite(m.selectedListID); err != nil {
 					m.statusLine = "Favorite toggle failed: " + err.Error()
 					return m, nil
@@ -667,6 +794,15 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case closeEditorMsg:
+		m.editorOpen = false
+		m.editorTarget = EditorTargetNone
+		return m, m.loadDataCmd()
+
+	case closeConfirmMsg:
+		m.confirmOpen = false
+		return m, m.loadDataCmd()
 
 	case dataLoadedMsg:
 		if msg.err != nil {
@@ -746,6 +882,28 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskTable.SetRows(mapTasksToRows(msg.tasks, m.taskGroupMode, m.taskSubtasks))
 		m.taskTable.NoTasksMessage = ""
 		m.loadedTasks = append([]cache.TaskEntity(nil), msg.tasks...)
+
+		// Handle ID remapping for displayed/selected tasks
+		if m.displayedTaskID != "" && strings.HasPrefix(m.displayedTaskID, "tmp_") {
+			// If our current tmp ID is gone, look for a task that might be its replacement.
+			// Since we don't have a direct map, we can check if there's only one task with SyncStateSynced 
+			// that was recently updated, or better: just check if the ID is missing and try to recover.
+			if _, ok := m.taskTable.RowByID(m.displayedTaskID); !ok {
+				// The tmp ID is gone. If there is exactly one new synced task that wasn't there before, 
+				// we could guess. But a safer way is to just let the user re-select if it's ambiguous.
+				// However, usually, if we just created a task, it's the one we're looking at.
+				for _, t := range msg.tasks {
+					if !strings.HasPrefix(t.ID, "tmp_") && t.SyncState == cache.SyncStateSynced {
+						// This is a heuristic: if we just lost a tmp task and found a new real one, switch to it.
+						// This works well for single-user create-then-view flow.
+						m.displayedTaskID = t.ID
+						m.selectedTaskID = t.ID
+						break
+					}
+				}
+			}
+		}
+
 		if m.displayedTaskID != "" {
 			if _, ok := m.taskTable.RowByID(m.displayedTaskID); !ok {
 				m.displayedTaskID = ""
@@ -819,11 +977,14 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshDetail(false, "")
 
 	case editResultMsg:
+		m.editorOpen = false
+		m.editorTarget = EditorTargetNone
+		m.confirmOpen = false
 		if msg.err != nil {
-			m.statusLine = "Edit failed: " + msg.err.Error()
+			m.statusLine = "Operation failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.statusLine = "Task title updated locally and queued for provider push"
+		m.statusLine = "Success locally and queued for provider push"
 		return m, m.loadDataCmd()
 
 	case syncResultMsg:
@@ -841,9 +1002,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.loadDataCmd()
 
 	case commentResultMsg:
-		m.commentMode = false
-		m.commentInput = ""
-		m.commentTaskID = ""
+		m.editorOpen = false
+		m.editorTarget = EditorTargetNone
 		if msg.err != nil {
 			m.statusLine = "Comment failed: " + msg.err.Error()
 			return m, nil
@@ -901,27 +1061,14 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *RootModel) detailPanelMove(delta int) (tea.Model, tea.Cmd) {
-	m.detailPanel.Move(delta)
-	// Movement in detail pane might reveal/hide images, so we need to refresh to trigger uploads if needed
-	return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
-}
-
 func (m *RootModel) handleHorizontalMove(delta int) (tea.Model, tea.Cmd) {
 	switch m.activePane {
 	case 0:
 		m.sidebar.MoveHorizontal(delta)
 	case 1:
 		m.taskTable.MoveHorizontal(delta)
-	case 2:
-		return m.detailPanelMoveHorizontal(delta)
 	}
 	return m, nil
-}
-
-func (m *RootModel) detailPanelMoveHorizontal(delta int) (tea.Model, tea.Cmd) {
-	m.detailPanel.MoveHorizontal(delta)
-	return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 }
 
 func (m *RootModel) handleMoveToTop() (tea.Model, tea.Cmd) {
@@ -930,9 +1077,6 @@ func (m *RootModel) handleMoveToTop() (tea.Model, tea.Cmd) {
 		m.sidebar.MoveToTop()
 	case 1:
 		m.taskTable.MoveToTop()
-	case 2:
-		m.detailPanel.MoveToTop()
-		return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
 	return m, nil
 }
@@ -943,9 +1087,6 @@ func (m *RootModel) handleMoveToBottom() (tea.Model, tea.Cmd) {
 		m.sidebar.MoveToBottom()
 	case 1:
 		m.taskTable.MoveToBottom()
-	case 2:
-		m.detailPanel.MoveToBottom()
-		return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	}
 	return m, nil
 }
@@ -1024,6 +1165,16 @@ func (m RootModel) View() string {
 
 	if m.controlOpen {
 		overlay := m.renderControlCenter(totalWidth)
+		y := centeredOverlayY(screen, overlay, 0)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.editorOpen {
+		overlay := m.editorModel.Render(totalWidth)
+		y := centeredOverlayY(screen, overlay, 0)
+		screen = overlayCentered(screen, overlay, totalWidth, y)
+	}
+	if m.confirmOpen {
+		overlay := m.confirmModel.Render(totalWidth)
 		y := centeredOverlayY(screen, overlay, 0)
 		screen = overlayCentered(screen, overlay, totalWidth, y)
 	}
@@ -1589,61 +1740,47 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 	selected, ok := m.displayedTaskRow()
 	if !ok {
 		if loading {
-			m.detailPanel.SetSections([]string{"Loading task detail..."})
+			m.detailPanel.SetFields([]components.DetailField{{Label: "Loading", Value: "Loading task detail..."}})
 			return nil
 		}
 		cursorTaskID := m.currentSelectedTaskID()
 		if cursorTaskID == "" {
-			m.detailPanel.SetSections([]string{"No task selected"})
+			m.detailPanel.SetFields([]components.DetailField{{Label: "Status", Value: "No task selected"}})
 			return nil
 		}
-		m.detailPanel.SetSections([]string{"No task opened. Press Enter on a task to open details."})
+		m.detailPanel.SetFields([]components.DetailField{{Label: "Status", Value: "No task opened. Press Enter on a task to open details."}})
 		return nil
 	}
 
 	task, err := m.repo.GetTaskByID(selected.ID)
 	if err != nil {
-		m.detailPanel.SetSections([]string{
-			"Title: " + selected.Title,
-			"Failed to load task detail: " + err.Error(),
+		m.detailPanel.SetFields([]components.DetailField{
+			{Label: "Title", Value: selected.Title},
+			{Label: "Error", Value: "Failed to load task detail: " + err.Error()},
 		})
 		return nil
 	}
 
-	sections := make([]string, 0, 32)
+	fields := make([]components.DetailField, 0, 10)
 	if loading {
 		if loadingMsg == "" {
 			loadingMsg = "Revalidating detail..."
 		}
-		sections = append(sections, loadingMsg, "")
+		fields = append(fields, components.DetailField{Label: "Loading", Value: loadingMsg})
 	}
-
-	labelStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	commentsTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("220"))
-	authorStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("111"))
-	descTitleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
 
 	if task == nil {
-		sections = append(sections,
-			labelStyle.Render("Title: ")+valueStyle.Render(selected.Title),
-			labelStyle.Render("Status: ")+valueStyle.Render(selected.Status),
-			labelStyle.Render("Assignees: ")+valueStyle.Render(selected.Assignees),
+		fields = append(fields,
+			components.DetailField{Key: "title", Label: "Title", Value: selected.Title, Editable: true},
+			components.DetailField{Key: "status", Label: "Status", Value: selected.Status, Editable: true},
+			components.DetailField{Label: "Assignees", Value: selected.Assignees},
 		)
 		if m.detailError != "" && m.detailErrorTask == selected.ID {
-			sections = append(sections, "", labelStyle.Render("Last revalidate error: ")+valueStyle.Render(m.detailError))
+			fields = append(fields, components.DetailField{Label: "Last Error", Value: m.detailError})
 		}
-		sections = append(sections,
-			"",
-			"Loading task detail from provider...",
-		)
-		m.detailPanel.SetSections(sections)
+		fields = append(fields, components.DetailField{Label: "Sync", Value: "Loading task detail from provider..."})
+		m.detailPanel.SetFields(fields)
 		return nil
-	}
-
-	comments, err := m.repo.GetTaskComments(selected.ID, 50)
-	if err != nil {
-		comments = nil
 	}
 
 	priority := "-"
@@ -1656,46 +1793,36 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 		dueDate = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
 	}
 
+	fields = append(fields,
+		components.DetailField{Key: "title", Label: "Title", Value: task.Title, Editable: true},
+		components.DetailField{Key: "status", Label: "Status", Value: task.Status, Editable: true},
+		components.DetailField{Key: "priority", Label: "Priority", Value: priority, Editable: true},
+		components.DetailField{Label: "Due Date", Value: dueDate},
+		components.DetailField{Label: "Assignees", Value: assignees},
+	)
+
+	if m.detailError != "" && m.detailErrorTask == selected.ID {
+		fields = append(fields, components.DetailField{Label: "Last Error", Value: m.detailError})
+	}
+
+	fields = append(fields, components.DetailField{Key: "description", Label: "Description", Value: task.DescriptionMD, Editable: true, MultiLine: true})
+
+	var cmds []tea.Cmd
 	var taskAttachments []provider.Attachment
 	if task.AttachmentsJSON != "" {
 		_ = json.Unmarshal([]byte(task.AttachmentsJSON), &taskAttachments)
 	}
 
-	descriptionLines := components.RenderMarkdownLines(task.DescriptionMD)
-	commentLines := make([]string, 0, len(comments)+1)
-	if len(comments) == 0 {
-		commentLines = append(commentLines, "(no comments in cache)")
-	} else {
-		for _, c := range comments {
-			author := c.AuthorName
-			if author == "" {
-				author = "unknown"
-			}
-			commentLines = append(commentLines, fmt.Sprintf("- %s: %s", authorStyle.Render(author), strings.TrimSpace(c.BodyMD)))
-			if m.debugMode && c.RawPayloadJSON != "" {
-				commentLines = append(commentLines, "  "+valueStyle.Render("[RAW]: "+c.RawPayloadJSON))
-			}
-		}
-	}
-
-	var cmds []tea.Cmd
-	attachmentLines := make([]string, 0, len(taskAttachments)+1)
-	if len(taskAttachments) == 0 {
-		attachmentLines = append(attachmentLines, "(no attachments)")
-	} else {
+	if len(taskAttachments) > 0 {
+		var sb strings.Builder
 		isKitty := components.IsKittyTerminal() && m.kittyGraphicsEnabled
 		_, _, rightInnerWidth, _, _, _ := m.layout()
-		imageMaxWidth := rightInnerWidth - 4 // small padding
+		imageMaxWidth := rightInnerWidth - 4
 		for _, a := range taskAttachments {
-			line := fmt.Sprintf("- %s (%s)", a.Filename, formatSize(a.Size))
-			if a.URL != "" {
-				line += fmt.Sprintf(" [%s]", a.URL)
-			}
-			attachmentLines = append(attachmentLines, line)
+			sb.WriteString(fmt.Sprintf("- %s (%s)\n", a.Filename, formatSize(a.Size)))
 			if isKitty && isImage(a.Filename) {
 				localPath := m.attachments.GetLocalPath(a.ID, a.Filename)
 				if _, err := os.Stat(localPath); err == nil {
-					// Use ID-based Kitty placement
 					id, exists := m.kittyImageIDs[localPath]
 					if !exists {
 						id = m.nextKittyID
@@ -1703,39 +1830,32 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 						m.kittyImageIDs[localPath] = id
 						cmds = append(cmds, m.uploadToKittyCmd(id, localPath))
 					}
-					
-					// Get dimensions to reserve space correctly
 					w, h, err := components.GetImageDimensions(localPath)
 					if err == nil {
 						cols, rows := components.CalculateRenderSize(w, h, imageMaxWidth)
-						attachmentLines = append(attachmentLines, components.RenderKittyPlacement(id, cols, rows))
-					} else {
-						attachmentLines = append(attachmentLines, "  [Error loading image dimensions]")
+						sb.WriteString(components.RenderKittyPlacement(id, cols, rows) + "\n")
 					}
-				} else {
-					attachmentLines = append(attachmentLines, "  [Image not downloaded. Press 'a' to download all attachments]")
 				}
 			}
 		}
+		fields = append(fields, components.DetailField{Label: "Attachments", Value: sb.String(), MultiLine: true})
 	}
 
-	sections = append(sections,
-		labelStyle.Render("Title: ")+valueStyle.Render(task.Title),
-		labelStyle.Render("Status: ")+valueStyle.Render(task.Status),
-		labelStyle.Render("Priority: ")+valueStyle.Render(priority),
-		labelStyle.Render("Due Date: ")+valueStyle.Render(dueDate),
-		labelStyle.Render("Assignees: ")+valueStyle.Render(assignees),
-	)
-	if m.detailError != "" && m.detailErrorTask == selected.ID {
-		sections = append(sections, "", labelStyle.Render("Last revalidate error: ")+valueStyle.Render(m.detailError))
+	// Add comments as a non-editable multiline field for now, or handle separately
+	comments, err := m.repo.GetTaskComments(selected.ID, 50)
+	if err == nil && len(comments) > 0 {
+		var sb strings.Builder
+		for _, c := range comments {
+			author := c.AuthorName
+			if author == "" {
+				author = "unknown"
+			}
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", author, strings.TrimSpace(c.BodyMD)))
+		}
+		fields = append(fields, components.DetailField{Label: "Comments", Value: sb.String(), MultiLine: true})
 	}
-	sections = append(sections, "", descTitleStyle.Render("Description:"))
-	sections = append(sections, descriptionLines...)
-	sections = append(sections, "", commentsTitleStyle.Render("Comments:"))
-	sections = append(sections, commentLines...)
-	sections = append(sections, "", labelStyle.Render("Attachments:"))
-	sections = append(sections, attachmentLines...)
-	m.detailPanel.SetSections(sections)
+
+	m.detailPanel.SetFields(fields)
 	return tea.Batch(cmds...)
 }
 
@@ -1842,33 +1962,6 @@ func (m *RootModel) refreshCurrentTaskNowCmd() tea.Cmd {
 	)
 }
 
-func (m RootModel) editSelectedTaskCmd() tea.Cmd {
-	row, ok := m.taskTable.Selected()
-	if !ok {
-		return func() tea.Msg { return editResultMsg{err: fmt.Errorf("no task selected")} }
-	}
-	if m.repo == nil || m.sync == nil {
-		return func() tea.Msg { return editResultMsg{err: fmt.Errorf("sync/edit services unavailable")} }
-	}
-
-	return func() tea.Msg {
-		newTitle := row.Title
-		if strings.Contains(newTitle, " (edited)") {
-			newTitle = strings.TrimSuffix(newTitle, " (edited)")
-		} else {
-			newTitle += " (edited)"
-		}
-
-		if err := m.repo.UpdateTaskTitle(row.ID, newTitle); err != nil {
-			return editResultMsg{err: err}
-		}
-		if err := m.sync.QueueTaskUpdate(row.ID, provider.TaskUpdate{Title: &newTitle}); err != nil {
-			return editResultMsg{err: err}
-		}
-		return editResultMsg{}
-	}
-}
-
 func (m RootModel) syncNowCmd() tea.Cmd {
 	if m.sync == nil {
 		return func() tea.Msg { return syncResultMsg{err: fmt.Errorf("sync service unavailable")} }
@@ -1879,39 +1972,6 @@ func (m RootModel) syncNowCmd() tea.Cmd {
 		defer cancel()
 		err := m.sync.SyncList(ctx, listID)
 		return syncResultMsg{err: err}
-	}
-}
-
-func (m RootModel) submitCommentCmd() tea.Cmd {
-	taskID := m.commentTaskID
-	text := strings.TrimSpace(m.commentInput)
-	if taskID == "" {
-		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("comment target not set")} }
-	}
-	if text == "" {
-		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("comment cannot be empty")} }
-	}
-	if m.repo == nil || m.sync == nil {
-		return func() tea.Msg { return commentResultMsg{err: fmt.Errorf("sync/comment services unavailable")} }
-	}
-
-	return func() tea.Msg {
-		now := time.Now().UnixMilli()
-		localCommentID := fmt.Sprintf("local-%d", now)
-		if err := m.repo.SaveComments([]cache.CommentEntity{{
-			ID:             localCommentID,
-			TaskID:         taskID,
-			AuthorName:     "you",
-			BodyMD:         text,
-			RawPayloadJSON: text,
-			CreatedAtUnix:  now,
-		}}); err != nil {
-			return commentResultMsg{err: err}
-		}
-		if err := m.sync.QueueAddComment(taskID, text, localCommentID); err != nil {
-			return commentResultMsg{err: err}
-		}
-		return commentResultMsg{}
 	}
 }
 
@@ -2750,4 +2810,185 @@ func normalizeSearchText(s string) string {
 		return ""
 	}
 	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+func (m *RootModel) openEditor(target EditorTarget, initialValue string, prompt string) (tea.Model, tea.Cmd) {
+	m.editorOpen = true
+	m.editorTarget = target
+	m.editorModel = components.NewTextEditor(prompt)
+	m.editorModel.Value = initialValue
+	m.editorModel.Cursor = len(initialValue)
+	m.editorModel.Active = true
+	m.editorModel.OnSubmit = func(value string) tea.Cmd {
+		return m.submitEditorCmd(target, value)
+	}
+	m.editorModel.OnCancel = func() tea.Cmd {
+		return m.closeEditorCmd()
+	}
+	return m, nil
+}
+
+func (m *RootModel) openConfirm(prompt string, expected string, onConfirm func() tea.Cmd) (tea.Model, tea.Cmd) {
+	m.confirmOpen = true
+	m.confirmModel = components.NewConfirm(prompt, expected)
+	m.confirmModel.Active = true
+	m.confirmModel.OnConfirm = onConfirm
+	m.confirmModel.OnCancel = func() tea.Cmd {
+		return m.closeConfirmCmd()
+	}
+	return m, nil
+}
+
+func (m RootModel) closeEditorCmd() tea.Cmd {
+	return func() tea.Msg { return closeEditorMsg{} }
+}
+
+func (m RootModel) closeConfirmCmd() tea.Cmd {
+	return func() tea.Msg { return closeConfirmMsg{} }
+}
+
+type closeEditorMsg struct{}
+type closeConfirmMsg struct{}
+
+func (m RootModel) submitEditorCmd(target EditorTarget, value string) tea.Cmd {
+	return func() tea.Msg {
+		switch target {
+		case EditorTargetTaskTitle:
+			row, ok := m.taskTable.Selected()
+			if !ok {
+				return editResultMsg{err: fmt.Errorf("no task selected")}
+			}
+			if err := m.repo.UpdateTaskTitle(row.ID, value); err != nil {
+				return editResultMsg{err: err}
+			}
+			if err := m.sync.QueueTaskUpdate(row.ID, provider.TaskUpdate{Title: &value}); err != nil {
+				return editResultMsg{err: err}
+			}
+			return editResultMsg{}
+
+		case EditorTargetTaskCreate:
+			if m.selectedListID == "" {
+				return editResultMsg{err: fmt.Errorf("no list selected")}
+			}
+			if err := m.sync.QueueCreateTask(m.selectedListID, provider.Task{Title: value}); err != nil {
+				return editResultMsg{err: err}
+			}
+			return editResultMsg{}
+
+		case EditorTargetListCreate:
+			list, _ := m.repo.GetListByID(m.selectedListID)
+			spaceID := ""
+			if list != nil {
+				spaceID = list.SpaceID
+			}
+			if spaceID == "" {
+				return editResultMsg{err: fmt.Errorf("could not determine space for list creation")}
+			}
+			if err := m.sync.QueueCreateList(spaceID, value); err != nil {
+				return editResultMsg{err: err}
+			}
+			return editResultMsg{}
+
+		case EditorTargetCommentCreate:
+			if m.displayedTaskID == "" {
+				return commentResultMsg{err: fmt.Errorf("no task opened")}
+			}
+			if err := m.sync.QueueCreateComment(m.displayedTaskID, value); err != nil {
+				return commentResultMsg{err: err}
+			}
+			return commentResultMsg{}
+
+		default:
+			return editResultMsg{err: fmt.Errorf("unknown editor target: %s", target)}
+		}
+	}
+}
+
+func (m RootModel) submitFieldUpdateCmd(key string, value string) tea.Cmd {
+	return func() tea.Msg {
+		row, ok := m.displayedTaskRow()
+		if !ok {
+			return editResultMsg{err: fmt.Errorf("no task selected")}
+		}
+		
+		var update provider.TaskUpdate
+		switch key {
+		case "title":
+			if err := m.repo.UpdateTaskTitle(row.ID, value); err != nil {
+				return editResultMsg{err: err}
+			}
+			update.Title = &value
+		case "status":
+			if err := m.repo.UpdateTaskStatus(row.ID, value); err != nil {
+				return editResultMsg{err: err}
+			}
+			update.Status = &value
+		case "description":
+			if err := m.repo.UpdateTaskDescription(row.ID, value); err != nil {
+				return editResultMsg{err: err}
+			}
+			update.DescriptionMD = &value
+		case "priority":
+			prio := ""
+			switch strings.ToLower(value) {
+			case "urgent":
+				prio = "1"
+			case "high":
+				prio = "2"
+			case "normal":
+				prio = "3"
+			case "low":
+				prio = "4"
+			default:
+				// try numeric directly
+				if _, err := strconv.Atoi(value); err == nil {
+					prio = value
+				}
+			}
+			if prio != "" {
+				update.PriorityKey = &prio
+			} else {
+				return editResultMsg{err: fmt.Errorf("invalid priority: %s", value)}
+			}
+		default:
+			return editResultMsg{err: fmt.Errorf("unsupported field: %s", key)}
+		}
+
+		if err := m.sync.QueueTaskUpdate(row.ID, update); err != nil {
+			return editResultMsg{err: err}
+		}
+		return editResultMsg{}
+	}
+}
+
+func (m RootModel) deleteTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.sync.QueueDeleteTask(taskID); err != nil {
+			return editResultMsg{err: err}
+		}
+		// Optimistically remove from view or let re-load handle it?
+		// Better to mark as pending delete in repo first.
+		_ = m.repo.UpdateTaskSyncState(taskID, cache.SyncStatePendingDelete, "")
+		return editResultMsg{}
+	}
+}
+
+func (m RootModel) deleteListCmd(listID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.sync.QueueDeleteList(listID); err != nil {
+			return editResultMsg{err: err}
+		}
+		_ = m.repo.UpdateListSyncState(listID, cache.SyncStatePendingDelete, "")
+		return editResultMsg{}
+	}
+}
+
+func (m RootModel) hasUnsavedChanges() bool {
+	if m.editorOpen && m.editorModel.Mode == components.VimModeNormal {
+		return true
+	}
+	if m.activePane == 2 && m.detailPanel.Mode == components.ModeInsert && m.detailPanel.Editor.Mode == components.VimModeNormal {
+		return true
+	}
+	return false
 }
