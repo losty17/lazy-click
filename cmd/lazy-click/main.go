@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +13,15 @@ import (
 )
 
 func main() {
+	showVersion := flag.Bool("version", false, "show version")
+	showVersionShort := flag.Bool("v", false, "show version")
+	flag.Parse()
+
+	if *showVersion || *showVersionShort {
+		fmt.Printf("lazy-click %s\n", app.Version)
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
