@@ -418,6 +418,7 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		{Kind: "help", Title: "X", Subtitle: "Collapse all groups", Badge: "keys"},
 		{Kind: "help", Title: "v", Subtitle: "Toggle favorites-only lists", Badge: "keys"},
 		{Kind: "help", Title: "m", Subtitle: "Toggle Me Mode", Badge: "keys"},
+		{Kind: "help", Title: "V", Subtitle: "Cycle view mode", Badge: "keys"},
 		{Kind: "help", Title: "a", Subtitle: "Download all attachments", Badge: "keys"},
 		{Kind: "help", Title: "A", Subtitle: "Download and open attachments", Badge: "keys"},
 		{Kind: "help", Title: m.keymap.CopyTaskLink, Subtitle: "Copy task link to clipboard", Badge: "keys"},
@@ -731,6 +732,19 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	case "provider_next":
 		return m.switchToNextProviderCmd()
+	case "cycle_view_mode":
+		m.viewMode = (m.viewMode + 1) % 3
+		m.taskTable.Simplified = (m.viewMode == ViewModeSidebarTaskDetail)
+		switch m.viewMode {
+		case ViewModeDefault:
+			m.statusLine = "View Mode: Default"
+		case ViewModeSidebarTaskDetail:
+			m.statusLine = "View Mode: Sidebar Task List + Full Height Detail"
+		case ViewModeFullDetailWithComments:
+			m.statusLine = "View Mode: Full Detail + Comments Sidebar"
+		}
+		m.persistSessionSnapshot()
+		return m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 	case "set_clickup_pat":
 		m.openControlCenter(ControlModePAT)
 		return nil
@@ -767,6 +781,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "toggle_task_sort_direction", Title: "Toggle task sort direction", Subtitle: "Switch asc/desc task sorting", Badge: "toggle", Aliases: []string{"sort direction", "task sort direction"}, Shortcut: m.keymap.SortDirection},
 		{ID: "cycle_task_group", Title: "Cycle task group", Subtitle: "Rotate current task grouping", Badge: "toggle", Aliases: []string{"group tasks", "grp"}, Shortcut: m.keymap.GroupTasks},
 		{ID: "cycle_subtasks", Title: "Cycle subtask mode", Subtitle: "Flat/grouped subtasks", Badge: "toggle", Aliases: []string{"subtasks", "subtask"}, Shortcut: m.keymap.Subtasks},
+		{ID: "cycle_view_mode", Title: "Cycle view mode", Subtitle: "Toggle layout modes", Badge: "toggle", Aliases: []string{"view mode", "layout"}, Shortcut: m.keymap.ViewMode},
 		{ID: "open_attachments", Title: "Open attachments...", Subtitle: "Choose an attachment to open", Badge: "file", Aliases: []string{"attachments", "files"}, Shortcut: "A"},
 		{ID: "clear_task_search", Title: "Clear task search", Subtitle: "Remove active task search query", Badge: "search", Aliases: []string{"clear search", "search off"}},
 		{ID: "toggle_selected_favorite", Title: "Toggle selected list favorite", Subtitle: "Mark/unmark selected list", Badge: "list", Aliases: []string{"favorite", "fav"}, Shortcut: m.keymap.Favorite},
@@ -827,6 +842,7 @@ func (m *RootModel) saveTaskPrefs() {
 	_ = m.repo.SaveAppState(appStateStatusFilter, m.statusFilter)
 	_ = m.repo.SaveAppState(appStateTaskSearchQuery, m.searchQuery)
 	_ = m.repo.SaveAppState(appStateMeMode, fmt.Sprintf("%t", m.meMode))
+	_ = m.repo.SaveAppState(appStateViewMode, fmt.Sprintf("%d", m.viewMode))
 	_ = m.repo.SaveAppState(appStateKittyGraphicsEnabled, fmt.Sprintf("%t", m.kittyGraphicsEnabled))
 }
 
@@ -867,6 +883,8 @@ func (m *RootModel) applySessionSnapshot(snapshot uiSessionSnapshot) {
 	m.statusFilter = snapshot.StatusFilter
 	m.searchQuery = snapshot.TaskSearchQuery
 	m.meMode = snapshot.MeMode
+	m.viewMode = snapshot.ViewMode
+	m.taskTable.Simplified = (m.viewMode == ViewModeSidebarTaskDetail)
 	if m.activePane < 0 || m.activePane > 2 {
 		m.activePane = 0
 	}
@@ -887,6 +905,7 @@ func (m *RootModel) currentSnapshot() uiSessionSnapshot {
 		StatusFilter:    m.statusFilter,
 		TaskSearchQuery: m.searchQuery,
 		MeMode:          m.meMode,
+		ViewMode:        m.viewMode,
 	}
 }
 

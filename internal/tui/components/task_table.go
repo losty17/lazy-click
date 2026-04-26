@@ -39,6 +39,7 @@ type TaskTableModel struct {
 	x               int
 	displayedTaskID string
 	NoTasksMessage  string
+	Simplified      bool
 }
 
 func NewTaskTable() TaskTableModel {
@@ -233,6 +234,13 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 	// Title / Status / Priority / Due Date / Estimate / Assignees
 	weights := []int{75, 9, 1, 3, 1, 11}
 	minCols := []int{12, 7, 9, 10, 8, 10}
+	
+	if m.Simplified {
+		sepCount = 0
+		weights = []int{100}
+		minCols = []int{width - prefixWidth}
+	}
+
 	usable := max(width-prefixWidth-(sepCount*sepWidth), 1)
 	minUsable := 0
 	for _, w := range minCols {
@@ -258,6 +266,11 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 		if row.Indent > 0 {
 			title = strings.Repeat(" ", row.Indent) + title
 		}
+		
+		if m.Simplified {
+			return fitCell(title, col[0])
+		}
+
 		parts := []string{
 			fitCell(title, col[0]),
 			fitCell(strings.ToUpper(row.Status), col[1]),
@@ -269,14 +282,19 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 		return strings.Join(parts, " | ")
 	}
 
-	headerLine := "  " + strings.Join([]string{
-		fitCell("Title", col[0]),
-		fitCell("Status", col[1]),
-		fitCell("Priority", col[2]),
-		fitCell("Due Date", col[3]),
-		fitCell("Estimate", col[4]),
-		fitCell("Assignees", col[5]),
-	}, " | ")
+	var headerLine string
+	if m.Simplified {
+		headerLine = "  " + fitCell("Title", col[0])
+	} else {
+		headerLine = "  " + strings.Join([]string{
+			fitCell("Title", col[0]),
+			fitCell("Status", col[1]),
+			fitCell("Priority", col[2]),
+			fitCell("Due Date", col[3]),
+			fitCell("Estimate", col[4]),
+			fitCell("Assignees", col[5]),
+		}, " | ")
+	}
 
 	xOffset := m.xForWidth(lineWidth, width)
 	lines := []string{titleStyle.Render(lineWindow(title, width, 0))}
@@ -349,6 +367,12 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 			titleValue = strings.Repeat(" ", row.Indent) + titleValue
 		}
 		titleCell := fitCell(titleValue, col[0])
+		if m.Simplified {
+			line := prefixStyle.Render(prefix) + style.Render(titleCell)
+			lines = append(lines, line)
+			continue
+		}
+
 		statusCell := fitCell(strings.ToUpper(formatStatus(row.Status, col[1])), col[1])
 		priorityCell := fitCell(priorityCellText(row.Priority), col[2])
 		dueDateCell := fitCell(row.DueDate, col[3])

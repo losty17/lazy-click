@@ -40,6 +40,7 @@ const (
 	appStateActiveProviderID = "ui.active_provider_id"
 	appStateClickUpToken     = "provider.clickup.pat"
 	appStateMeMode           = "ui.me_mode"
+	appStateViewMode         = "ui.view_mode"
 	appStateKittyGraphicsEnabled = "ui.kitty_graphics.enabled"
 
 	detailDebounceDelay = 3 * time.Second
@@ -94,6 +95,7 @@ type uiSessionSnapshot struct {
 	StatusFilter    string             `json:"status_filter"`
 	TaskSearchQuery string             `json:"task_search_query"`
 	MeMode          bool               `json:"me_mode"`
+	ViewMode        ViewMode           `json:"view_mode"`
 }
 
 type TaskSortMode string
@@ -163,6 +165,14 @@ const (
 	EditorTargetCommentCreate EditorTarget = "comment_create"
 )
 
+type ViewMode int
+
+const (
+	ViewModeDefault ViewMode = iota
+	ViewModeSidebarTaskDetail
+	ViewModeFullDetailWithComments
+)
+
 type RootModel struct {
 	width               int
 	height              int
@@ -172,6 +182,7 @@ type RootModel struct {
 	sync                SyncQueuer
 	attachments         *attachment.Manager
 	provider            string
+	viewMode            ViewMode
 	debugMode           bool
 	activeProviderID    string
 	availableProviders  []syncengine.ProviderMeta
@@ -184,6 +195,7 @@ type RootModel struct {
 	sidebar             components.SidebarModel
 	taskTable           components.TaskTableModel
 	detailPanel         components.DetailModel
+	commentsSidebar     components.DetailModel
 	statuses            []string
 	taskSortMode        TaskSortMode
 	taskSortDirection   TaskSortDirection
@@ -259,6 +271,7 @@ type dataLoadedMsg struct {
 	restoredStatus         string
 	restoredTaskSearch     string
 	restoredMeMode         bool
+	restoredViewMode       ViewMode
 	restoredKittyGraphics  bool
 	restoredActiveProvider string
 	hasRestoreSnapshot     bool
@@ -342,6 +355,7 @@ func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachme
 		sidebar:             components.NewSidebar(),
 		taskTable:           components.NewTaskTable(),
 		detailPanel:         components.NewDetail(),
+		commentsSidebar:     components.NewDetail(),
 		listSortMode:        cache.ListSortNameAsc,
 		taskSortMode:        TaskSortPriority,
 		taskSortDirection:   TaskSortAsc,
@@ -392,9 +406,10 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.editorOpen {
 			m.editorModel.Width = max(40, m.width-20)
 		}
-		var detailCmd tea.Cmd
+		var detailCmd, commentsCmd tea.Cmd
 		m.detailPanel, detailCmd = m.detailPanel.Update(msg)
-		return m, detailCmd
+		m.commentsSidebar, commentsCmd = m.commentsSidebar.Update(msg)
+		return m, tea.Batch(detailCmd, commentsCmd)
 
 	case components.FieldUpdateMsg:
 		m.detailPanel.Mode = components.ModeNormal
@@ -549,9 +564,19 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "tab":
 			m.activePane = (m.activePane + 1) % 3
+			if m.viewMode == ViewModeSidebarTaskDetail && m.activePane == 0 {
+				m.activePane = 1
+			} else if m.viewMode == ViewModeFullDetailWithComments && m.activePane == 0 {
+				m.activePane = 1
+			}
 			return m, nil
 		case "shift+tab", "backtab":
 			m.activePane = (m.activePane + 2) % 3
+			if m.viewMode == ViewModeSidebarTaskDetail && m.activePane == 0 {
+				m.activePane = 2
+			} else if m.viewMode == ViewModeFullDetailWithComments && m.activePane == 0 {
+				m.activePane = 2
+			}
 			return m, nil
 		case "r":
 			return m, m.loadDataCmd()
@@ -563,11 +588,29 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.syncDetail = "starting manual sync"
 				return m, tea.Batch(m.syncNowCmd(), m.syncTickCmd())
 			}
+		case m.keymap.ViewMode:
+			m.viewMode = (m.viewMode + 1) % 3
+			m.taskTable.Simplified = (m.viewMode == ViewModeSidebarTaskDetail)
+			switch m.viewMode {
+			case ViewModeDefault:
+				m.statusLine = "View Mode: Default"
+			case ViewModeSidebarTaskDetail:
+				m.statusLine = "View Mode: Sidebar Task List + Full Height Detail"
+			case ViewModeFullDetailWithComments:
+				m.statusLine = "View Mode: Full Detail + Comments Sidebar"
+			}
+			return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 		}
 
 		if m.activePane == 2 {
 			var cmd tea.Cmd
 			m.detailPanel, cmd = m.detailPanel.Update(msg)
+			return m, cmd
+		}
+
+		if m.activePane == 1 && m.viewMode == ViewModeFullDetailWithComments {
+			var cmd tea.Cmd
+			m.commentsSidebar, cmd = m.commentsSidebar.Update(msg)
 			return m, cmd
 		}
 
@@ -873,6 +916,8 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusFilter = msg.restoredStatus
 			m.searchQuery = msg.restoredTaskSearch
 			m.meMode = msg.restoredMeMode
+			m.viewMode = msg.restoredViewMode
+			m.taskTable.Simplified = (m.viewMode == ViewModeSidebarTaskDetail)
 			m.kittyGraphicsEnabled = msg.restoredKittyGraphics
 			if msg.restoredActiveProvider != "" && m.sync != nil {
 				if m.sync.SetActiveProvider(msg.restoredActiveProvider) {
@@ -1132,9 +1177,14 @@ func (m *RootModel) handleMoveToBottom() (tea.Model, tea.Cmd) {
 }
 
 func (m RootModel) View() string {
-	totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight := m.layout()
+	totalWidth, sidebarWidth, tableWidth, _, sidebarHeight, tableHeight, detailHeight := m.layout()
 
-	title := HeaderStyle.Render(fmt.Sprintf("lazy-click [%s]", m.provider))
+	wsInfo := m.currentWorkspaceInfo()
+	headerText := fmt.Sprintf("lazy-click [%s]", m.provider)
+	if wsInfo != "" {
+		headerText = fmt.Sprintf("lazy-click [%s] %s", m.provider, wsInfo)
+	}
+	title := HeaderStyle.Render(headerText)
 	syncLine := m.syncProgressLine(totalWidth)
 	header := lipgloss.JoinHorizontal(lipgloss.Top, title, lipgloss.NewStyle().Width(totalWidth-lipgloss.Width(title)).Align(lipgloss.Right).Render(syncLine))
 
@@ -1154,26 +1204,63 @@ func (m RootModel) View() string {
 		detailStyle = FocusedPanelStyle
 	}
 
-	sidebar := sidebarStyle.Width(sidebarInnerWidth).Height(sidebarInnerHeight).Render(
-		m.sidebar.Render(m.activePane == 0, sidebarInnerWidth-4, sidebarInnerHeight),
-	)
-	table := tableStyle.Width(rightInnerWidth).Height(tableInnerHeight).Render(
-		m.taskTable.Render(m.activePane == 1, rightInnerWidth-2, tableInnerHeight),
-	)
-	
-	detailContent := m.detailPanel.Render(m.activePane == 2, rightInnerWidth-2, detailInnerHeight)
-	detail := detailStyle.Width(rightInnerWidth).Height(detailInnerHeight).Render(detailContent)
+	var body string
+	switch m.viewMode {
+	case ViewModeDefault:
+		sidebar := sidebarStyle.Width(sidebarWidth).Height(sidebarHeight).Render(
+			m.sidebar.Render(m.activePane == 0, sidebarWidth-4, sidebarHeight),
+		)
+		table := tableStyle.Width(tableWidth).Height(tableHeight).Render(
+			m.taskTable.Render(m.activePane == 1, tableWidth-2, tableHeight),
+		)
+		detail := detailStyle.Width(tableWidth).Height(detailHeight).Render(
+			m.detailPanel.Render(m.activePane == 2, tableWidth-2, detailHeight),
+		)
+		right := lipgloss.JoinVertical(
+			lipgloss.Left,
+			lipgloss.NewStyle().MarginBottom(verticalPaneGap).Render(table),
+			detail,
+		)
+		body = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			lipgloss.NewStyle().MarginRight(horizontalPaneGap).Render(sidebar),
+			right,
+		)
+	case ViewModeSidebarTaskDetail:
+		table := tableStyle.Width(sidebarWidth).Height(sidebarHeight).Render(
+			m.taskTable.Render(m.activePane == 1, sidebarWidth-2, sidebarHeight),
+		)
+		detail := detailStyle.Width(tableWidth).Height(sidebarHeight).Render(
+			m.detailPanel.Render(m.activePane == 2, tableWidth-2, sidebarHeight),
+		)
+		body = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			lipgloss.NewStyle().MarginRight(horizontalPaneGap).Render(table),
+			detail,
+		)
+	case ViewModeFullDetailWithComments:
+		// In this mode, we show detail full height and comments on a sidebar
+		// sidebarWidth here is used for the comments sidebar
+		detail := detailStyle.Width(tableWidth).Height(sidebarHeight).Render(
+			m.detailPanel.Render(m.activePane == 2, tableWidth-2, sidebarHeight),
+		)
+		
+		commentsStyle := PanelStyle
+		if m.activePane == 1 {
+			commentsStyle = FocusedPanelStyle
+		}
 
-	right := lipgloss.JoinVertical(
-		lipgloss.Left,
-		lipgloss.NewStyle().MarginBottom(verticalPaneGap).Render(table),
-		detail,
-	)
-	body := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		lipgloss.NewStyle().MarginRight(horizontalPaneGap).Render(sidebar),
-		right,
-	)
+		commentsView := commentsStyle.
+			Width(sidebarWidth).
+			Height(sidebarHeight).
+			Render(m.commentsSidebar.Render(m.activePane == 1, sidebarWidth-2, sidebarHeight))
+
+		body = lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			lipgloss.NewStyle().MarginRight(horizontalPaneGap).Render(detail),
+			commentsView,
+		)
+	}
 
 	statusFilter := "all"
 	if m.statusFilter != "" {
@@ -1241,13 +1328,11 @@ func (m RootModel) View() string {
 		Render(screen)
 }
 
-func (m RootModel) layout() (int, int, int, int, int, int) {
+func (m RootModel) layout() (int, int, int, int, int, int, int) {
 	hFrame := PanelStyle.GetHorizontalFrameSize()
 	vFrame := PanelStyle.GetVerticalFrameSize()
-	const verticalPaneGap = 0
 	const horizontalPaneGap = 1
 
-	// totalWidth := 78
 	totalWidth := hFrame
 	if m.width > 0 {
 		totalWidth = m.width - 2
@@ -1263,37 +1348,56 @@ func (m RootModel) layout() (int, int, int, int, int, int) {
 	}
 
 	innerWidthBudget := max(totalWidth-(2*hFrame)-horizontalPaneGap, 2)
-	sidebarInnerWidth := innerWidthBudget / 5
-	minSidebar := 8
-	maxSidebar := max(innerWidthBudget-8, minSidebar)
-	if sidebarInnerWidth < minSidebar {
-		sidebarInnerWidth = minSidebar
-	}
-	if sidebarInnerWidth > maxSidebar {
-		sidebarInnerWidth = maxSidebar
-	}
-	rightInnerWidth := innerWidthBudget - sidebarInnerWidth + reserved
-	if rightInnerWidth < 8 {
-		rightInnerWidth = 8
-		sidebarInnerWidth = innerWidthBudget - rightInnerWidth
-		if sidebarInnerWidth < 1 {
-			sidebarInnerWidth = 1
-			rightInnerWidth = innerWidthBudget - sidebarInnerWidth
+	
+	var sidebarWidth, tableWidth, detailWidth int
+	var sidebarHeight, tableHeight, detailHeight int
+
+	sidebarHeight = max(bodyOuterHeight-vFrame, 1)
+
+	switch m.viewMode {
+	case ViewModeDefault:
+		sidebarWidth = innerWidthBudget / 5
+		minSidebar := 8
+		maxSidebar := max(innerWidthBudget-8, minSidebar)
+		if sidebarWidth < minSidebar {
+			sidebarWidth = minSidebar
 		}
+		if sidebarWidth > maxSidebar {
+			sidebarWidth = maxSidebar
+		}
+		tableWidth = innerWidthBudget - sidebarWidth + (totalWidth - innerWidthBudget - (2 * hFrame) - horizontalPaneGap) + 4
+		detailWidth = tableWidth
+
+		rightInnerHeightBudget := max(bodyOuterHeight-(2*vFrame), 2)
+		tableHeight = max((rightInnerHeightBudget*2)/3, 1)
+		detailHeight = rightInnerHeightBudget - tableHeight
+		if detailHeight < 1 {
+			detailHeight = 1
+			tableHeight = max(rightInnerHeightBudget-1, 1)
+		}
+
+	case ViewModeSidebarTaskDetail:
+		sidebarWidth = innerWidthBudget / 4
+		if sidebarWidth < 15 {
+			sidebarWidth = 15
+		}
+		tableWidth = innerWidthBudget - sidebarWidth + 4
+		detailWidth = tableWidth
+		tableHeight = sidebarHeight
+		detailHeight = sidebarHeight
+
+	case ViewModeFullDetailWithComments:
+		sidebarWidth = innerWidthBudget / 3
+		if sidebarWidth < 20 {
+			sidebarWidth = 20
+		}
+		tableWidth = innerWidthBudget - sidebarWidth + 4
+		detailWidth = tableWidth
+		tableHeight = sidebarHeight
+		detailHeight = sidebarHeight
 	}
 
-	sidebarInnerHeight := max(bodyOuterHeight-vFrame, 1)
-
-	rightInnerHeightBudget := max(bodyOuterHeight-(2*vFrame)-verticalPaneGap, 2)
-	tableInnerHeight := max((rightInnerHeightBudget*2)/3, 1)
-	detailInnerHeight := rightInnerHeightBudget - tableInnerHeight
-
-	if detailInnerHeight < 1 {
-		detailInnerHeight = 1
-		tableInnerHeight = max(rightInnerHeightBudget-1, 1)
-	}
-
-	return totalWidth, sidebarInnerWidth, rightInnerWidth, sidebarInnerHeight, tableInnerHeight, detailInnerHeight
+	return totalWidth, sidebarWidth, tableWidth, detailWidth, sidebarHeight, tableHeight, detailHeight
 }
 
 func (m RootModel) fetchCurrentUserCmd() tea.Cmd {
@@ -1405,6 +1509,13 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 				}
 			}
 
+			viewMode := ViewModeDefault
+			if viewModeRaw, err := m.repo.GetAppState(appStateViewMode); err == nil && viewModeRaw != "" {
+				if parsed, err := strconv.Atoi(viewModeRaw); err == nil {
+					viewMode = ViewMode(parsed)
+				}
+			}
+
 			kittyEnabled := false
 			if kittyRaw, err := m.repo.GetAppState(appStateKittyGraphicsEnabled); err == nil && kittyRaw != "" {
 				if parsed, parseErr := strconv.ParseBool(kittyRaw); parseErr == nil {
@@ -1456,6 +1567,7 @@ func (m RootModel) loadDataCmd() tea.Cmd {
 			msg.restoredStatus = statusFilter
 			msg.restoredTaskSearch = taskSearch
 			msg.restoredMeMode = meMode
+			msg.restoredViewMode = viewMode
 			msg.restoredKittyGraphics = kittyEnabled
 			msg.hasRestoreSnapshot = hasSnapshot
 			msg.restoreSnapshot = snapshot
@@ -1764,6 +1876,33 @@ func (m RootModel) selectedListIDFromSidebar() string {
 	return row.ID
 }
 
+func (m RootModel) currentWorkspaceInfo() string {
+	if m.selectedListID == "" {
+		return ""
+	}
+	var listName, spaceName, workspaceName string
+	for _, l := range m.lists {
+		if l.ID == m.selectedListID {
+			listName = l.Name
+			for _, s := range m.spaces {
+				if s.ID == l.SpaceID {
+					spaceName = s.Name
+					workspaceName = s.WorkspaceName
+					break
+				}
+			}
+			break
+		}
+	}
+	if workspaceName != "" && spaceName != "" && listName != "" {
+		return fmt.Sprintf("%s > %s > %s", workspaceName, spaceName, listName)
+	}
+	if spaceName != "" && listName != "" {
+		return fmt.Sprintf("%s > %s", spaceName, listName)
+	}
+	return listName
+}
+
 func (m RootModel) currentSelectedTaskID() string {
 	row, ok := m.taskTable.Selected()
 	if !ok {
@@ -1859,7 +1998,7 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 	if len(taskAttachments) > 0 {
 		var sb strings.Builder
 		isKitty := components.IsKittyTerminal() && m.kittyGraphicsEnabled
-		_, _, rightInnerWidth, _, _, _ := m.layout()
+		_, _, _, rightInnerWidth, _, _, _ := m.layout()
 		imageMaxWidth := rightInnerWidth - 4
 		for _, a := range taskAttachments {
 			sb.WriteString(fmt.Sprintf("- %s (%s)\n", a.Filename, formatSize(a.Size)))
@@ -1888,14 +2027,29 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 	comments, err := m.repo.GetTaskComments(selected.ID, 50)
 	if err == nil && len(comments) > 0 {
 		var sb strings.Builder
+		commentFields := make([]components.DetailField, 0, len(comments))
 		for _, c := range comments {
 			author := c.AuthorName
 			if author == "" {
 				author = "unknown"
 			}
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", author, strings.TrimSpace(c.BodyMD)))
+			body := strings.TrimSpace(c.BodyMD)
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", author, body))
+			commentFields = append(commentFields, components.DetailField{
+				Label: author,
+				Value: body,
+				MultiLine: true,
+			})
 		}
-		fields = append(fields, components.DetailField{Label: "Comments", Value: sb.String(), MultiLine: true})
+		
+		// Only add comments to main detail panel if we are NOT in the mode that has a dedicated sidebar for them
+		if m.viewMode != ViewModeFullDetailWithComments {
+			fields = append(fields, components.DetailField{Label: "Comments", Value: sb.String(), MultiLine: true})
+		}
+		
+		m.commentsSidebar.SetFields(commentFields)
+	} else {
+		m.commentsSidebar.SetFields([]components.DetailField{{Label: "Comments", Value: "No comments"}})
 	}
 
 	m.detailPanel.SetFields(fields)
