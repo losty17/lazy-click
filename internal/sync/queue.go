@@ -191,7 +191,11 @@ func (e *Engine) QueueStartTimeTracking(workspaceID string, taskID string) error
 		return err
 	}
 
-	return e.enqueue(opStartTimeTracking, "task", taskID, payload)
+	if err := e.enqueue(opStartTimeTracking, "task", taskID, payload); err != nil {
+		return err
+	}
+	e.resetAutomaticSchedule()
+	return nil
 }
 
 func (e *Engine) QueueStopTimeTracking(workspaceID string) error {
@@ -207,7 +211,11 @@ func (e *Engine) QueueStopTimeTracking(workspaceID string) error {
 		entityID = "global"
 	}
 
-	return e.enqueue(opStopTimeTracking, "workspace", entityID, payload)
+	if err := e.enqueue(opStopTimeTracking, "workspace", entityID, payload); err != nil {
+		return err
+	}
+	e.resetAutomaticSchedule()
+	return nil
 }
 
 func (e *Engine) QueueCreateTimeEntry(workspaceID string, taskID string, entry provider.TimeEntry) error {

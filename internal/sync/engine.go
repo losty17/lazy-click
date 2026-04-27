@@ -12,16 +12,18 @@ import (
 )
 
 type Engine struct {
-	repo        *cache.Repository
-	provider    provider.ProjectProvider
-	providerKey string
-	logger      *log.Logger
-	interval    time.Duration
+	repo             *cache.Repository
+	provider         provider.ProjectProvider
+	providerKey      string
+	logger           *log.Logger
+	interval         time.Duration // Check interval (for push queue)
+	fullSyncInterval time.Duration // Full sync interval (metadata + tasks)
 
 	mu              sync.RWMutex
 	activeListID    string
 	syncStatus      string
 	resetAutoSyncCh chan struct{}
+	lastFullSync    time.Time
 }
 
 func NewEngine(repo *cache.Repository, providerKey string, provider provider.ProjectProvider, logger *log.Logger, interval time.Duration) *Engine {
@@ -29,13 +31,14 @@ func NewEngine(repo *cache.Repository, providerKey string, provider provider.Pro
 		interval = 10 * time.Second
 	}
 	return &Engine{
-		repo:            repo,
-		provider:        provider,
-		providerKey:     providerKey,
-		logger:          logger,
-		interval:        interval,
-		syncStatus:      "idle",
-		resetAutoSyncCh: make(chan struct{}, 1),
+		repo:             repo,
+		provider:         provider,
+		providerKey:      providerKey,
+		logger:           logger,
+		interval:         interval,
+		fullSyncInterval: 15 * time.Minute, // Default full sync interval
+		syncStatus:       "idle",
+		resetAutoSyncCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -95,24 +98,49 @@ func (e *Engine) Run(ctx context.Context) error {
 }
 
 func (e *Engine) Cycle(ctx context.Context) error {
-	e.setSyncStatus("pulling metadata")
-	if err := e.PullMetadataOnce(ctx); err != nil {
-		e.setSyncStatus("metadata pull failed")
-		return err
-	}
-	active := e.ActiveListID()
-	if active != "" {
-		e.setSyncStatus("pulling tasks for active list " + active)
-		if err := e.PullListTasksOnce(ctx, active); err != nil {
-			e.setSyncStatus("active-list task pull failed")
+	// 1. Process all pending mutations first
+	for {
+		didWork, err := e.PushOnce(ctx)
+		if err != nil {
+			e.setSyncStatus("push failed")
 			return err
 		}
+		if !didWork {
+			break
+		}
 	}
-	e.setSyncStatus("pushing pending mutations")
-	if err := e.PushOnce(ctx); err != nil {
-		e.setSyncStatus("push failed")
-		return err
+
+	// 2. Periodic full sync (pull metadata and tasks)
+	e.mu.RLock()
+	lastFull := e.lastFullSync
+	fullInterval := e.fullSyncInterval
+	e.mu.RUnlock()
+
+	if time.Since(lastFull) >= fullInterval {
+		e.setSyncStatus("pulling metadata")
+		if err := e.PullMetadataOnce(ctx); err != nil {
+			e.setSyncStatus("metadata pull failed")
+			return err
+		}
+		active := e.ActiveListID()
+		if active != "" {
+			e.setSyncStatus("pulling tasks for active list " + active)
+			if err := e.PullListTasksOnce(ctx, active); err != nil {
+				e.setSyncStatus("active-list task pull failed")
+				return err
+			}
+		}
+
+		// Cleanup old sync items (older than 1 day)
+		if err := e.repo.CleanupOldSyncItems(24 * time.Hour); err != nil && e.logger != nil {
+			e.logger.Printf("failed to cleanup old sync items: %v", err)
+		}
+
+		e.mu.Lock()
+		e.lastFullSync = time.Now()
+		e.mu.Unlock()
 	}
+
 	e.setSyncStatus("idle")
 	return nil
 }
@@ -143,11 +171,19 @@ func (e *Engine) SyncList(ctx context.Context, listID string) error {
 			return err
 		}
 	}
-	e.setSyncStatus("pushing pending mutations")
-	if err := e.PushOnce(ctx); err != nil {
-		e.setSyncStatus("push failed")
-		return err
+
+	// Also push pending mutations when manually syncing
+	for {
+		didWork, err := e.PushOnce(ctx)
+		if err != nil {
+			e.setSyncStatus("push failed")
+			return err
+		}
+		if !didWork {
+			break
+		}
 	}
+
 	e.setSyncStatus("idle")
 	return nil
 }

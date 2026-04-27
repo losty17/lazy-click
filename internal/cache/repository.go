@@ -213,6 +213,11 @@ func (r *Repository) MarkSyncFailed(id uint64, message string) error {
 	}).Error
 }
 
+func (r *Repository) CleanupOldSyncItems(maxAge time.Duration) error {
+	cutoff := time.Now().Add(-maxAge).UnixMilli()
+	return r.db.Where("state = ? AND updated_at_unix < ?", "done", cutoff).Delete(&SyncQueueEntity{}).Error
+}
+
 func (r *Repository) SaveComments(comments []CommentEntity) error {
 	if len(comments) == 0 {
 		return nil

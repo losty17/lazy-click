@@ -108,22 +108,25 @@ type addCommentPayload struct {
 	LocalCommentID string `json:"local_comment_id,omitempty"`
 }
 
-func (e *Engine) PushOnce(ctx context.Context) error {
+func (e *Engine) PushOnce(ctx context.Context) (bool, error) {
 	e.setSyncStatus("checking pending push queue")
 	item, err := e.repo.ClaimNextPendingSyncItem(e.providerKey)
-	if err != nil || item == nil {
+	if err != nil {
+		return false, err
+	}
+	if item == nil {
 		e.setSyncStatus("no pending push items")
-		return err
+		return false, nil
 	}
 	e.setSyncStatus("pushing " + item.Operation + " for " + item.EntityType + " " + item.EntityID)
 
 	if err := e.applyQueueItem(ctx, *item); err != nil {
 		e.setSyncStatus("push failed for queue item")
 		_ = e.repo.MarkSyncFailed(item.ID, err.Error())
-		return err
+		return false, err
 	}
 	e.setSyncStatus("push completed for queue item")
-	return e.repo.MarkSyncDone(item.ID)
+	return true, e.repo.MarkSyncDone(item.ID)
 }
 
 func (e *Engine) applyQueueItem(ctx context.Context, item cache.SyncQueueEntity) error {

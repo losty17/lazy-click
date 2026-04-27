@@ -334,6 +334,13 @@ type detailRevalidateResultMsg struct {
 type pollTaskMsg struct{}
 type timerTickMsg struct{}
 
+type timerStartedMsg struct {
+	taskID    string
+	taskTitle string
+}
+
+type timerStoppedMsg struct{}
+
 type manualTaskRefreshResultMsg struct {
 	TaskID string
 	Err    error
@@ -944,6 +951,20 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case timerStartedMsg:
+		m.runningTimer = &provider.TimeEntry{
+			TaskID:      msg.taskID,
+			TaskTitle:   msg.taskTitle,
+			StartUnixMS: time.Now().UnixMilli(),
+		}
+		m.statusLine = "Timer started: " + msg.taskTitle
+		return m, nil
+
+	case timerStoppedMsg:
+		m.runningTimer = nil
+		m.statusLine = "Timer stopped"
+		return m, nil
+
 	case timeEntriesLoadedMsg:
 		if msg.err == nil {
 			m.timeEntries = msg.entries
@@ -1521,7 +1542,7 @@ func (m RootModel) stopTimerCmd() tea.Cmd {
 		if err := m.sync.QueueStopTimeTracking(""); err != nil {
 			return syncResultMsg{err: err}
 		}
-		return syncResultMsg{}
+		return timerStoppedMsg{}
 	}
 }
 
@@ -1551,14 +1572,23 @@ func (m RootModel) toggleTimerCmd(taskID string) tea.Cmd {
 				return syncResultMsg{err: err}
 			}
 			if running.TaskID == taskID {
-				return syncResultMsg{}
+				return timerStoppedMsg{}
 			}
 		}
 
 		if err := m.sync.QueueStartTimeTracking("", taskID); err != nil {
 			return syncResultMsg{err: err}
 		}
-		return syncResultMsg{}
+
+		// Try to find task title for visual feedback
+		taskTitle := taskID
+		if row, ok := m.taskTable.RowByID(taskID); ok {
+			taskTitle = row.Title
+		} else if task, err := m.repo.GetTaskByID(taskID); err == nil && task != nil {
+			taskTitle = task.Title
+		}
+
+		return timerStartedMsg{taskID: taskID, taskTitle: taskTitle}
 	}
 }
 

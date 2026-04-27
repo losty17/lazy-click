@@ -45,7 +45,7 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 
 	logger := log.New(os.Stderr, "sync: ", log.LstdFlags)
 	localProvider := local.New(repo)
-	localEngine := syncengine.NewEngine(repo, local.ProviderType, localProvider, logger, 15*time.Minute)
+	localEngine := syncengine.NewEngine(repo, local.ProviderType, localProvider, logger, 15*time.Second)
 
 	clickupToken := strings.TrimSpace(cfg.ClickUpAPIToken)
 	if clickupToken == "" {
@@ -54,7 +54,7 @@ func Bootstrap(ctx context.Context) (*Runtime, error) {
 		}
 	}
 	clickupProvider := clickup.NewFromToken(clickupToken)
-	clickupEngine := syncengine.NewEngine(repo, "clickup", clickupProvider, logger, 15*time.Minute)
+	clickupEngine := syncengine.NewEngine(repo, "clickup", clickupProvider, logger, 15*time.Second)
 
 	activeProviderID := strings.TrimSpace(cfg.DefaultProvider)
 	if savedProviderID, stateErr := repo.GetAppState(appStateActiveProviderID); stateErr == nil && strings.TrimSpace(savedProviderID) != "" {
