@@ -140,7 +140,7 @@ type SyncQueuer interface {
 	QueueCreateList(spaceID string, name string) error
 	QueueUpdateList(listID string, name string) error
 	QueueDeleteList(listID string) error
-	QueueCreateComment(taskID string, text string) error
+	QueueCreateComment(taskID string, text string, user provider.User) error
 	QueueUpdateComment(commentID string, text string) error
 	QueueDeleteComment(commentID string) error
 	QueueAddComment(taskID string, text string, localCommentID string) error // Deprecated
@@ -1275,9 +1275,16 @@ func (m RootModel) View() string {
 	totalWidth, sidebarWidth, tableWidth, _, sidebarHeight, tableHeight, detailHeight := m.layout()
 
 	wsInfo := m.currentWorkspaceInfo()
+	userName := m.currentUser.Username
+	if userName == "" {
+		userName = m.currentUser.Email
+	}
 	headerText := fmt.Sprintf("lazy-click [%s]", m.provider)
+	if userName != "" {
+		headerText = fmt.Sprintf("lazy-click [%s] %s", m.provider, userName)
+	}
 	if wsInfo != "" {
-		headerText = fmt.Sprintf("lazy-click [%s] %s", m.provider, wsInfo)
+		headerText = fmt.Sprintf("%s - %s", headerText, wsInfo)
 	}
 	title := HeaderStyle.Render(headerText)
 
@@ -3539,7 +3546,7 @@ func (m RootModel) submitEditorCmd(target EditorTarget, value string) tea.Cmd {
 			if m.displayedTaskID == "" {
 				return commentResultMsg{err: fmt.Errorf("no task opened")}
 			}
-			if err := m.sync.QueueCreateComment(m.displayedTaskID, value); err != nil {
+			if err := m.sync.QueueCreateComment(m.displayedTaskID, value, m.currentUser); err != nil {
 				return commentResultMsg{err: err}
 			}
 			return commentResultMsg{}

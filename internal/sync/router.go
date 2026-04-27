@@ -121,12 +121,12 @@ func (r *Router) QueueDeleteList(listID string) error {
 	return node.engine.QueueDeleteList(listID)
 }
 
-func (r *Router) QueueCreateComment(taskID string, text string) error {
+func (r *Router) QueueCreateComment(taskID string, text string, user provider.User) error {
 	node, err := r.activeNode()
 	if err != nil {
 		return err
 	}
-	return node.engine.QueueCreateComment(taskID, text)
+	return node.engine.QueueCreateComment(taskID, text, user)
 }
 
 func (r *Router) QueueUpdateComment(commentID string, text string) error {

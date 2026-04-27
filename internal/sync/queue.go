@@ -125,12 +125,18 @@ func (e *Engine) QueueDeleteList(listID string) error {
 	return e.enqueue(opDeleteList, "list", listID, payload)
 }
 
-func (e *Engine) QueueCreateComment(taskID string, text string) error {
+func (e *Engine) QueueCreateComment(taskID string, text string, user provider.User) error {
 	tempID := "tmp_comment_" + uuid.New().String()
 	now := time.Now().UnixMilli()
+	authorName := user.Username
+	if authorName == "" {
+		authorName = user.Email
+	}
 	entity := cache.CommentEntity{
 		ID:            tempID,
 		TaskID:        taskID,
+		AuthorID:      user.ID,
+		AuthorName:    authorName,
 		BodyMD:        text,
 		SyncState:     cache.SyncStatePendingCreate,
 		CreatedAtUnix: now,
@@ -303,5 +309,5 @@ func (e *Engine) enqueue(op string, entityType string, entityID string, payloadJ
 
 // Deprecated
 func (e *Engine) QueueAddComment(taskID string, text string, localCommentID string) error {
-	return e.QueueCreateComment(taskID, text)
+	return e.QueueCreateComment(taskID, text, provider.User{})
 }
