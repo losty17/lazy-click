@@ -1982,6 +1982,8 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 		components.DetailField{Key: "status", Label: "Status", Value: task.Status, Editable: true},
 		components.DetailField{Key: "priority", Label: "Priority", Value: priority, Editable: true},
 		components.DetailField{Label: "Due Date", Value: dueDate},
+		components.DetailField{Label: "Estimate", Value: formatEstimate(task.EstimateMS)},
+		components.DetailField{Label: "Time Tracked", Value: formatEstimate(task.TimeTrackedMS)},
 		components.DetailField{Label: "Assignees", Value: assignees},
 	)
 
@@ -2579,6 +2581,7 @@ func mapTasksToRows(tasks []cache.TaskEntity, groupMode TaskGroupMode, subtaskMo
 				Status:      "",
 				Priority:    "",
 				Estimate:    "",
+				TimeTracked: "",
 				DueDate:     "",
 				Assignees:   "",
 				CollapseKey: currentGroupCollapseKey,
@@ -2626,6 +2629,7 @@ func mapTasksToRows(tasks []cache.TaskEntity, groupMode TaskGroupMode, subtaskMo
 			StatusColor: task.StatusColor,
 			Priority:    priority,
 			Estimate:    formatEstimate(task.EstimateMS),
+			TimeTracked: formatEstimate(task.TimeTrackedMS),
 			DueDate:     due,
 			Assignees:   formatAssignees(task.AssigneesJSON),
 			Indent:      indent,

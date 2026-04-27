@@ -280,6 +280,7 @@ func mapEntityToTask(row cache.TaskEntity) provider.Task {
 		Status:        row.Status,
 		StatusColor:   row.StatusColor,
 		EstimateMS:    row.EstimateMS,
+		TimeTrackedMS: row.TimeTrackedMS,
 		DueAtUnixMS:   row.DueAtUnixMS,
 		UpdatedAtUnix: row.UpdatedAtUnix,
 		CustomFields:  map[string]any{"source": "local-db"},

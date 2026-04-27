@@ -16,6 +16,7 @@ type TaskTableRow struct {
 	StatusColor string
 	Priority    string
 	Estimate    string
+	TimeTracked string
 	DueDate     string
 	Assignees   string
 	Indent      int
@@ -230,10 +231,10 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 		prefixWidth = 2
 		sepWidth    = 3
 	)
-	sepCount := 5
-	// Title / Status / Priority / Due Date / Estimate / Assignees
-	weights := []int{75, 9, 1, 3, 1, 11}
-	minCols := []int{12, 7, 9, 10, 8, 10}
+	sepCount := 6
+	// Title / Status / Priority / Due Date / Estimate / Tracked / Assignees
+	weights := []int{75, 9, 1, 3, 1, 1, 11}
+	minCols := []int{12, 7, 9, 10, 8, 8, 10}
 	
 	if m.Simplified {
 		sepCount = 0
@@ -277,7 +278,8 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 			fitCell(priorityCellText(row.Priority), col[2]),
 			fitCell(row.DueDate, col[3]),
 			fitCell(row.Estimate, col[4]),
-			fitCell(row.Assignees, col[5]),
+			fitCell(row.TimeTracked, col[5]),
+			fitCell(row.Assignees, col[6]),
 		}
 		return strings.Join(parts, " | ")
 	}
@@ -292,7 +294,8 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 			fitCell("Priority", col[2]),
 			fitCell("Due Date", col[3]),
 			fitCell("Estimate", col[4]),
-			fitCell("Assignees", col[5]),
+			fitCell("Tracked", col[5]),
+			fitCell("Assignees", col[6]),
 		}, " | ")
 	}
 
@@ -377,7 +380,8 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 		priorityCell := fitCell(priorityCellText(row.Priority), col[2])
 		dueDateCell := fitCell(row.DueDate, col[3])
 		estimateCell := fitCell(row.Estimate, col[4])
-		assigneesCell := fitCell(row.Assignees, col[5])
+		trackedCell := fitCell(row.TimeTracked, col[5])
+		assigneesCell := fitCell(row.Assignees, col[6])
 
 		statusStyle := statusCellStyle(row.StatusColor)
 		priorityStyle := priorityCellStyle(row.Priority)
@@ -401,7 +405,7 @@ func (m *TaskTableModel) Render(active bool, width int, height int) string {
 			statusStyle.Render(statusCell),
 			style.Render(" | "),
 			priorityStyle.Render(priorityCell),
-			style.Render(" | " + dueDateCell + " | " + estimateCell + " | " + assigneesCell),
+			style.Render(" | " + dueDateCell + " | " + estimateCell + " | " + trackedCell + " | " + assigneesCell),
 		}, "")
 		lines = append(lines, line)
 	}

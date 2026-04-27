@@ -66,7 +66,7 @@ func (r *Repository) SaveTasks(tasks []TaskEntity) error {
 			updateColumns := []string{
 				"provider", "external_id", "list_id", "parent_task_id", "is_subtask",
 				"title", "status", "status_color", "priority_key", "priority_label",
-				"priority_rank", "priority_color", "estimate_ms", "due_at_unix_ms",
+				"priority_rank", "priority_color", "estimate_ms", "time_tracked_ms", "due_at_unix_ms",
 				"assignees_json", "custom_fields_json", "updated_at_unix", "last_fetched_unix",
 				"updated_at", "sync_state", "last_error",
 			}

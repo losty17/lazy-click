@@ -277,6 +277,9 @@ func (p *Provider) mapTask(t TaskDTO, listID string) provider.Task {
 	if t.TimeEstimate != nil {
 		task.EstimateMS = t.TimeEstimate
 	}
+	if t.TimeSpent != nil {
+		task.TimeTrackedMS = t.TimeSpent
+	}
 	if t.Priority != nil {
 		rank, _ := strconv.Atoi(t.Priority.OrderIndex)
 		task.Priority = &provider.Priority{

@@ -43,6 +43,7 @@ type Task struct {
 	StatusColor   string
 	Priority      *Priority
 	EstimateMS    *int64
+	TimeTrackedMS *int64
 	DueAtUnixMS   *int64
 	Assignees     []User
 	Tags          []Tag

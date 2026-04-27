@@ -179,3 +179,37 @@ func TestGetListsByQuery_ExcludesPendingDelete(t *testing.T) {
 	}
 }
 
+func TestSaveAndRetrieveTaskTimeFields(t *testing.T) {
+	repo := setupTestDB(t)
+
+	est := int64(3600000) // 1h
+	tracked := int64(1800000) // 30m
+
+	task := TaskEntity{
+		ID:            "task1",
+		Provider:      "clickup",
+		Title:         "Time Task",
+		EstimateMS:    &est,
+		TimeTrackedMS: &tracked,
+		ListID:        "list1",
+		UpdatedAtUnix: 123456789,
+	}
+
+	if err := repo.SaveTasks([]TaskEntity{task}); err != nil {
+		t.Fatalf("failed to save task: %v", err)
+	}
+
+	retrieved, err := repo.GetTaskByID("task1")
+	if err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+
+	if retrieved.EstimateMS == nil || *retrieved.EstimateMS != est {
+		t.Errorf("EstimateMS mismatch: got %v, want %v", retrieved.EstimateMS, est)
+	}
+
+	if retrieved.TimeTrackedMS == nil || *retrieved.TimeTrackedMS != tracked {
+		t.Errorf("TimeTrackedMS mismatch: got %v, want %v", retrieved.TimeTrackedMS, tracked)
+	}
+}
+

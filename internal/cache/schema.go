@@ -50,6 +50,7 @@ type TaskEntity struct {
 	PriorityRank     int
 	PriorityColor    string `gorm:"size:16"`
 	EstimateMS       *int64
+	TimeTrackedMS    *int64
 	DueAtUnixMS      *int64
 	AssigneesJSON    string `gorm:"type:text"`
 	AttachmentsJSON  string `gorm:"type:text"`
