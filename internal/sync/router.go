@@ -145,6 +145,62 @@ func (r *Router) QueueDeleteComment(commentID string) error {
 	return node.engine.QueueDeleteComment(commentID)
 }
 
+func (r *Router) QueueStartTimeTracking(workspaceID string, taskID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueStartTimeTracking(workspaceID, taskID)
+}
+
+func (r *Router) QueueStopTimeTracking(workspaceID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueStopTimeTracking(workspaceID)
+}
+
+func (r *Router) QueueCreateTimeEntry(workspaceID string, taskID string, entry provider.TimeEntry) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueCreateTimeEntry(workspaceID, taskID, entry)
+}
+
+func (r *Router) QueueUpdateTimeEntry(workspaceID string, entryID string, update provider.TimeEntryUpdate) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueUpdateTimeEntry(workspaceID, entryID, update)
+}
+
+func (r *Router) QueueDeleteTimeEntry(workspaceID string, entryID string) error {
+	node, err := r.activeNode()
+	if err != nil {
+		return err
+	}
+	return node.engine.QueueDeleteTimeEntry(workspaceID, entryID)
+}
+
+func (r *Router) GetRunningTimeEntry(ctx context.Context, workspaceID string) (*provider.TimeEntry, error) {
+	node, err := r.activeNode()
+	if err != nil {
+		return nil, err
+	}
+	return node.api.GetRunningTimeEntry(ctx, workspaceID)
+}
+
+func (r *Router) GetTimeEntries(ctx context.Context, workspaceID string, taskID string) ([]provider.TimeEntry, error) {
+	node, err := r.activeNode()
+	if err != nil {
+		return nil, err
+	}
+	return node.api.GetTimeEntries(ctx, workspaceID, taskID)
+}
+
 func (r *Router) GetCurrentUser(ctx context.Context) (provider.User, error) {
 	node, err := r.activeNode()
 	if err != nil {

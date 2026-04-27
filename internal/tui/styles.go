@@ -17,4 +17,5 @@ var (
 	ControlActionNameStyle   = lipgloss.NewStyle().Bold(true)
 	ControlActionAliasStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	RestorePromptStyle       = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("178")).Foreground(lipgloss.Color("229")).Padding(0, 1)
+	TimerStyle               = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true)
 )

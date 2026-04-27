@@ -182,6 +182,99 @@ func (e *Engine) QueueDeleteComment(commentID string) error {
 	return e.enqueue(opDeleteComment, "comment", commentID, payload)
 }
 
+func (e *Engine) QueueStartTimeTracking(workspaceID string, taskID string) error {
+	payload, err := cache.MarshalPayload(startTimeTrackingPayload{
+		WorkspaceID: workspaceID,
+		TaskID:      taskID,
+	})
+	if err != nil {
+		return err
+	}
+
+	return e.enqueue(opStartTimeTracking, "task", taskID, payload)
+}
+
+func (e *Engine) QueueStopTimeTracking(workspaceID string) error {
+	payload, err := cache.MarshalPayload(stopTimeTrackingPayload{
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return err
+	}
+
+	entityID := workspaceID
+	if entityID == "" {
+		entityID = "global"
+	}
+
+	return e.enqueue(opStopTimeTracking, "workspace", entityID, payload)
+}
+
+func (e *Engine) QueueCreateTimeEntry(workspaceID string, taskID string, entry provider.TimeEntry) error {
+	tempID := "tmp_time_" + uuid.New().String()
+	entry.ID = tempID
+
+	entity := cache.TimeEntryEntity{
+		ID:            tempID,
+		Provider:      e.providerKey,
+		ExternalID:    tempID,
+		TaskID:        taskID,
+		Description:   entry.Description,
+		StartUnixMS:   entry.StartUnixMS,
+		EndUnixMS:     entry.EndUnixMS,
+		DurationMS:    entry.DurationMS,
+		SyncState:     cache.SyncStatePendingCreate,
+		UpdatedAtUnix: time.Now().UnixMilli(),
+	}
+	if err := e.repo.SaveTimeEntries([]cache.TimeEntryEntity{entity}); err != nil {
+		return err
+	}
+
+	payload, err := cache.MarshalPayload(createTimeEntryPayload{
+		WorkspaceID: workspaceID,
+		TaskID:      taskID,
+		Entry:       entry,
+	})
+	if err != nil {
+		return err
+	}
+
+	return e.enqueue(opCreateTimeEntry, "time_entry", tempID, payload)
+}
+
+func (e *Engine) QueueUpdateTimeEntry(workspaceID string, entryID string, update provider.TimeEntryUpdate) error {
+	if err := e.repo.UpdateTimeEntrySyncState(entryID, cache.SyncStatePendingUpdate, ""); err != nil {
+		return err
+	}
+
+	payload, err := cache.MarshalPayload(updateTimeEntryPayload{
+		WorkspaceID: workspaceID,
+		EntryID:     entryID,
+		Update:      update,
+	})
+	if err != nil {
+		return err
+	}
+
+	return e.enqueue(opUpdateTimeEntry, "time_entry", entryID, payload)
+}
+
+func (e *Engine) QueueDeleteTimeEntry(workspaceID string, entryID string) error {
+	if err := e.repo.UpdateTimeEntrySyncState(entryID, cache.SyncStatePendingDelete, ""); err != nil {
+		return err
+	}
+
+	payload, err := cache.MarshalPayload(deleteTimeEntryPayload{
+		WorkspaceID: workspaceID,
+		EntryID:     entryID,
+	})
+	if err != nil {
+		return err
+	}
+
+	return e.enqueue(opDeleteTimeEntry, "time_entry", entryID, payload)
+}
+
 func (e *Engine) enqueue(op string, entityType string, entityID string, payloadJSON string) error {
 	now := time.Now().UnixMilli()
 	providerID := e.providerKey

@@ -182,7 +182,41 @@ func (e *Engine) RevalidateTask(ctx context.Context, taskID string) error {
 		e.setSyncStatus("task comments sync failed")
 		return err
 	}
+	if err := e.syncTaskTimeEntries(ctx, taskID); err != nil {
+		e.setSyncStatus("task time entries sync failed")
+		return err
+	}
 	e.setSyncStatus("task revalidated")
+	return nil
+}
+
+func (e *Engine) syncTaskTimeEntries(ctx context.Context, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	workspaceID, _ := e.repo.GetWorkspaceIDForTask(taskID)
+	entries, err := e.provider.GetTimeEntries(ctx, workspaceID, taskID)
+	if err != nil {
+		return err
+	}
+	rows := make([]cache.TimeEntryEntity, 0, len(entries))
+	for _, entry := range entries {
+		rows = append(rows, cache.TimeEntryEntity{
+			ID:            entry.ID,
+			Provider:      e.providerKey,
+			ExternalID:    entry.ID,
+			TaskID:        taskID,
+			Description:   entry.Description,
+			StartUnixMS:   entry.StartUnixMS,
+			EndUnixMS:     entry.EndUnixMS,
+			DurationMS:    entry.DurationMS,
+			SyncState:     cache.SyncStateSynced,
+			UpdatedAtUnix: time.Now().UnixMilli(),
+		})
+	}
+	if err := e.repo.SaveTimeEntries(rows); err != nil {
+		return err
+	}
 	return nil
 }
 

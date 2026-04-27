@@ -115,6 +115,20 @@ type CommentEntity struct {
 	UpdatedAt      time.Time
 }
 
+type TimeEntryEntity struct {
+	ID            string `gorm:"primaryKey;size:128"`
+	Provider      string `gorm:"index;size:32;not null"`
+	ExternalID    string `gorm:"index;size:128;not null"`
+	TaskID        string `gorm:"index;size:128;not null"`
+	Description   string `gorm:"type:text"`
+	StartUnixMS   int64  `gorm:"index;not null"`
+	EndUnixMS     *int64 `gorm:"index"`
+	DurationMS    int64
+	SyncState     string `gorm:"index;size:32;not null;default:synced"`
+	LastError     string `gorm:"type:text"`
+	UpdatedAtUnix int64  `gorm:"index"`
+	UpdatedAt     time.Time
+}
 
 type SyncQueueEntity struct {
 	ID            uint64 `gorm:"primaryKey;autoIncrement"`

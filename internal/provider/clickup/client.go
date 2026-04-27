@@ -219,6 +219,50 @@ func (c *Client) DeleteComment(ctx context.Context, commentID string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/comment/"+commentID, nil, nil)
 }
 
+func (c *Client) StartTimeTracking(ctx context.Context, teamID string, taskID string) error {
+	req := StartTimeEntryRequest{TID: taskID}
+	return c.doJSON(ctx, http.MethodPost, "/team/"+teamID+"/time_entries/start", req, nil)
+}
+
+func (c *Client) StopTimeTracking(ctx context.Context, teamID string) error {
+	return c.doJSON(ctx, http.MethodPost, "/team/"+teamID+"/time_entries/stop", nil, nil)
+}
+
+func (c *Client) GetRunningTimeEntry(ctx context.Context, teamID string) (*TimeEntryDTO, error) {
+	var resp struct {
+		Data *TimeEntryDTO `json:"data"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/team/"+teamID+"/time_entries/current", nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *Client) GetTimeEntries(ctx context.Context, teamID string, taskID string) ([]TimeEntryDTO, error) {
+	values := url.Values{}
+	if taskID != "" {
+		values.Set("task_id", taskID)
+	}
+	path := "/team/" + teamID + "/time_entries?" + values.Encode()
+	var resp GetTimeEntriesResponse
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Data, nil
+}
+
+func (c *Client) CreateTimeEntry(ctx context.Context, teamID string, req CreateTimeEntryRequest) error {
+	return c.doJSON(ctx, http.MethodPost, "/team/"+teamID+"/time_entries", req, nil)
+}
+
+func (c *Client) UpdateTimeEntry(ctx context.Context, teamID string, entryID string, req UpdateTimeEntryRequest) error {
+	return c.doJSON(ctx, http.MethodPut, "/team/"+teamID+"/time_entries/"+entryID, req, nil)
+}
+
+func (c *Client) DeleteTimeEntry(ctx context.Context, teamID string, entryID string) error {
+	return c.doJSON(ctx, http.MethodDelete, "/team/"+teamID+"/time_entries/"+entryID, nil, nil)
+}
+
 func (c *Client) getTeams(ctx context.Context) (*GetTeamsResponse, error) {
 	var resp GetTeamsResponse
 	if err := c.doJSON(ctx, http.MethodGet, "/team", nil, &resp); err != nil {

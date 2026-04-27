@@ -227,6 +227,66 @@ func (r *Repository) SaveComments(comments []CommentEntity) error {
 	})
 }
 
+func (r *Repository) SaveTimeEntries(entries []TimeEntryEntity) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		for _, entry := range entries {
+			if err := tx.Save(&entry).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *Repository) GetTimeEntriesByTask(taskID string) ([]TimeEntryEntity, error) {
+	var rows []TimeEntryEntity
+	err := r.db.Where("task_id = ?", taskID).Order("start_unix_ms DESC").Find(&rows).Error
+	return rows, err
+}
+
+func (r *Repository) GetTimeEntryByID(id string) (*TimeEntryEntity, error) {
+	var row TimeEntryEntity
+	if err := r.db.First(&row, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (r *Repository) GetWorkspaceIDForTask(taskID string) (string, error) {
+	var workspaceID string
+	err := r.db.Table("task_entities").
+		Select("space_entities.workspace_id").
+		Joins("JOIN list_entities ON list_entities.id = task_entities.list_id").
+		Joins("JOIN space_entities ON space_entities.id = list_entities.space_id").
+		Where("task_entities.id = ?", taskID).
+		Scan(&workspaceID).Error
+	if err != nil {
+		return "", err
+	}
+	return workspaceID, nil
+}
+
+func (r *Repository) DeleteTimeEntryByID(id string) error {
+	if id == "" {
+		return nil
+	}
+	return r.db.Delete(&TimeEntryEntity{}, "id = ?", id).Error
+}
+
+func (r *Repository) UpdateTimeEntrySyncState(id string, state string, errMessage string) error {
+	return r.db.Model(&TimeEntryEntity{}).Where("id = ?", id).Updates(map[string]any{
+		"sync_state": state,
+		"last_error": errMessage,
+		"updated_at": time.Now(),
+	}).Error
+}
+
 func (r *Repository) DeleteCommentByID(commentID string) error {
 	if commentID == "" {
 		return nil
@@ -400,6 +460,24 @@ func (r *Repository) RemapEntityID(oldID string, newID string, entityType string
 				}
 			} else {
 				if err := tx.Exec("UPDATE comment_entities SET id = ?, sync_state = 'synced' WHERE id = ?", newID, oldID).Error; err != nil {
+					return err
+				}
+			}
+		case "time_entry":
+			if err := tx.Exec("UPDATE sync_queue_entities SET entity_id = ? WHERE entity_id = ? AND entity_type = 'time_entry'", newID, oldID).Error; err != nil {
+				return err
+			}
+			var count int64
+			tx.Table("time_entry_entities").Where("id = ?", newID).Count(&count)
+			if count > 0 {
+				if err := tx.Exec("DELETE FROM time_entry_entities WHERE id = ?", oldID).Error; err != nil {
+					return err
+				}
+				if err := tx.Exec("UPDATE time_entry_entities SET sync_state = 'synced' WHERE id = ?", newID).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Exec("UPDATE time_entry_entities SET id = ?, sync_state = 'synced' WHERE id = ?", newID, oldID).Error; err != nil {
 					return err
 				}
 			}

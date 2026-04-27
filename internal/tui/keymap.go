@@ -28,6 +28,9 @@ type Keymap struct {
 	DeleteComment       string
 	ViewMode            string
 	OpenTaskInBrowser   string
+	StartTimeTracking   string
+	StopTimeTracking    string
+	ManageTimeEntries   string
 }
 
 func DefaultKeymap() Keymap {
@@ -59,5 +62,8 @@ func DefaultKeymap() Keymap {
 		DeleteComment:       "K",
 		ViewMode:            "V",
 		OpenTaskInBrowser:   "shift+enter",
+		StartTimeTracking:   "w",
+		StopTimeTracking:    "W",
+		ManageTimeEntries:   "T",
 	}
 }

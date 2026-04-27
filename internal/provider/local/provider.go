@@ -267,6 +267,34 @@ func (p *Provider) AddComment(ctx context.Context, taskID string, text string) (
 	}, nil
 }
 
+func (p *Provider) StartTimeTracking(ctx context.Context, workspaceID string, taskID string) error {
+	return nil
+}
+
+func (p *Provider) StopTimeTracking(ctx context.Context, workspaceID string) error {
+	return nil
+}
+
+func (p *Provider) GetRunningTimeEntry(ctx context.Context, workspaceID string) (*provider.TimeEntry, error) {
+	return nil, nil
+}
+
+func (p *Provider) GetTimeEntries(ctx context.Context, workspaceID string, taskID string) ([]provider.TimeEntry, error) {
+	return nil, nil
+}
+
+func (p *Provider) CreateTimeEntry(ctx context.Context, workspaceID string, taskID string, entry provider.TimeEntry) (provider.TimeEntry, error) {
+	return entry, nil
+}
+
+func (p *Provider) UpdateTimeEntry(ctx context.Context, workspaceID string, entryID string, update provider.TimeEntryUpdate) (provider.TimeEntry, error) {
+	return provider.TimeEntry{ID: entryID}, nil
+}
+
+func (p *Provider) DeleteTimeEntry(ctx context.Context, workspaceID string, entryID string) error {
+	return nil
+}
+
 func mapEntityToTask(row cache.TaskEntity) provider.Task {
 	task := provider.Task{
 		ID:            row.ID,

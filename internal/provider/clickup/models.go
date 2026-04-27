@@ -206,3 +206,37 @@ type UserDTO struct {
 	Username string    `json:"username"`
 	Email    string    `json:"email"`
 }
+
+type TimeEntryDTO struct {
+	ID          string     `json:"id"`
+	Task        *TaskDTO   `json:"task"`
+	Start       FlexString `json:"start"`
+	End         FlexString `json:"end"`
+	Duration    FlexString `json:"duration"`
+	Description string     `json:"description"`
+	User        UserDTO    `json:"user"`
+	At          FlexString `json:"at"`
+}
+
+type GetTimeEntriesResponse struct {
+	Data []TimeEntryDTO `json:"data"`
+}
+
+type StartTimeEntryRequest struct {
+	TID         string `json:"tid"`
+	Description string `json:"description,omitempty"`
+}
+
+type CreateTimeEntryRequest struct {
+	TID         string `json:"tid,omitempty"`
+	Start       int64  `json:"start"`
+	End         int64  `json:"end,omitempty"`
+	Duration    int64  `json:"duration,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type UpdateTimeEntryRequest struct {
+	Description *string `json:"description,omitempty"`
+	Start       *int64  `json:"start,omitempty"`
+	End         *int64  `json:"end,omitempty"`
+}

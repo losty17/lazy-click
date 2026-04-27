@@ -90,3 +90,21 @@ type TaskUpdate struct {
 	TagIDs        []string
 	CustomFields  map[string]any
 }
+
+type TimeEntry struct {
+	ID          string
+	TaskID      string
+	TaskTitle   string
+	Description string
+	StartUnixMS int64
+	EndUnixMS   *int64
+	DurationMS  int64
+	IsRunning   bool
+	User        User
+}
+
+type TimeEntryUpdate struct {
+	Description *string
+	StartUnixMS *int64
+	EndUnixMS   *int64
+}

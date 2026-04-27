@@ -59,6 +59,7 @@ const (
 	ControlModeHelp       ControlMode = "?"
 	ControlModeAttachment ControlMode = "!"
 	ControlModePAT        ControlMode = "$"
+	ControlModeTimeEntry  ControlMode = "T"
 )
 
 type controlResult struct {
@@ -72,6 +73,7 @@ type controlResult struct {
 	SpaceID    string
 	TaskID     string
 	CommentID  string
+	TimeEntryID string
 	TaskTitle  string
 	Attachment *provider.Attachment
 }
@@ -142,6 +144,17 @@ type SyncQueuer interface {
 	QueueUpdateComment(commentID string, text string) error
 	QueueDeleteComment(commentID string) error
 	QueueAddComment(taskID string, text string, localCommentID string) error // Deprecated
+
+	// Time Tracking
+	QueueStartTimeTracking(workspaceID string, taskID string) error
+	QueueStopTimeTracking(workspaceID string) error
+	QueueCreateTimeEntry(workspaceID string, taskID string, entry provider.TimeEntry) error
+	QueueUpdateTimeEntry(workspaceID string, entryID string, update provider.TimeEntryUpdate) error
+	QueueDeleteTimeEntry(workspaceID string, entryID string) error
+
+	GetRunningTimeEntry(ctx context.Context, workspaceID string) (*provider.TimeEntry, error)
+	GetTimeEntries(ctx context.Context, workspaceID string, taskID string) ([]provider.TimeEntry, error)
+
 	Cycle(ctx context.Context) error
 	SyncList(ctx context.Context, listID string) error
 	SetActiveListID(listID string)
@@ -163,6 +176,8 @@ const (
 	EditorTargetListCreate    EditorTarget = "list_create"
 	EditorTargetListName      EditorTarget = "list_name"
 	EditorTargetCommentCreate EditorTarget = "comment_create"
+	EditorTargetTimeEntryEdit   EditorTarget = "time_entry_edit"
+	EditorTargetTimeEntryCreate EditorTarget = "time_entry_create"
 )
 
 type ViewMode int
@@ -243,6 +258,9 @@ type RootModel struct {
 	syncError      string
 	syncDetail     string
 
+	runningTimer   *provider.TimeEntry
+	timeEntries    []provider.TimeEntry
+
 	selectedTaskID   string
 	displayedTaskID  string
 	detailLoading    bool
@@ -314,6 +332,7 @@ type detailRevalidateResultMsg struct {
 }
 
 type pollTaskMsg struct{}
+type timerTickMsg struct{}
 
 type manualTaskRefreshResultMsg struct {
 	TaskID string
@@ -323,6 +342,16 @@ type manualTaskRefreshResultMsg struct {
 type userLoadedMsg struct {
 	user provider.User
 	err  error
+}
+
+type runningTimerLoadedMsg struct {
+	timer *provider.TimeEntry
+	err   error
+}
+
+type timeEntriesLoadedMsg struct {
+	entries []provider.TimeEntry
+	err     error
 }
 
 func NewRootModel(repo *cache.Repository, sync SyncQueuer, attachments *attachment.Manager, providerName string, statusLine string, clickUpConnected bool, needsProviderSetup bool) RootModel {
@@ -375,6 +404,8 @@ func (m RootModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadDataCmd(),
 		m.fetchCurrentUserCmd(),
+		m.fetchRunningTimerCmd(),
+		m.timerTickCmd(),
 		m.pollTaskCmd(),
 		func() tea.Msg {
 			fmt.Print("\x1b[?1004h")
@@ -398,7 +429,15 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.terminalFocused && m.displayedTaskID != "" && !m.detailLoading && !m.editorOpen && !m.confirmOpen {
 			cmd = m.revalidateDetailCmd(m.displayedTaskID, m.detailReqToken)
 		}
-		return m, tea.Batch(cmd, m.pollTaskCmd())
+		return m, tea.Batch(cmd, m.fetchRunningTimerCmd(), m.pollTaskCmd())
+
+	case timerTickMsg:
+		var cmd tea.Cmd
+		// Every 10 seconds, also refresh from API
+		if time.Now().Unix()%10 == 0 {
+			cmd = m.fetchRunningTimerCmd()
+		}
+		return m, tea.Batch(m.timerTickCmd(), cmd)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -858,6 +897,20 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.keymap.DownloadAttachments:
 			return m, m.downloadAttachmentsCmd(false)
+		case m.keymap.StartTimeTracking:
+			if m.activePane == 1 {
+				row, ok := m.taskTable.Selected()
+				if ok && row.ID != "" {
+					return m, m.toggleTimerCmd(row.ID)
+				}
+			}
+		case m.keymap.StopTimeTracking:
+			return m, m.stopTimerCmd()
+		case m.keymap.ManageTimeEntries:
+			if m.displayedTaskID != "" {
+				m.openControlCenter(ControlModeTimeEntry)
+				return m, nil
+			}
 		case m.keymap.Debug:
 			m.debugMode = !m.debugMode
 			if m.debugMode {
@@ -865,7 +918,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.statusLine = "Debug mode disabled"
 			}
-			return m, m.refreshDetail(false, "")
+			return m, tea.Batch(m.refreshDetail(false, ""), m.fetchRunningTimerCmd())
 		case "A":
 			m.openControlCenter(ControlModeAttachment)
 			return m, nil
@@ -877,6 +930,24 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.meMode {
 				return m, m.loadDataCmd()
 			}
+		}
+		return m, nil
+
+	case runningTimerLoadedMsg:
+		if msg.err == nil {
+			m.runningTimer = msg.timer
+			if m.runningTimer != nil {
+				m.statusLine = "Running timer detected"
+			}
+		} else if m.debugMode {
+			m.statusLine = "Timer fetch error: " + msg.err.Error()
+		}
+		return m, nil
+
+	case timeEntriesLoadedMsg:
+		if msg.err == nil {
+			m.timeEntries = msg.entries
+			return m, m.refreshDetail(m.detailLoading, m.detailLoadingMsg)
 		}
 		return m, nil
 
@@ -1038,14 +1109,15 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncDetail = "task revalidate failed"
 			return m, m.refreshDetail(false, "")
 		}
-		m.detailError = ""
-		m.detailErrorTask = ""
-		m.displayedTaskID = msg.TaskID
-		m.taskTable.SetDisplayedTaskID(msg.TaskID)
-		m.syncDetail = "task revalidated"
-		return m, m.refreshDetail(false, "")
-
-	case manualTaskRefreshResultMsg:
+			m.detailError = ""
+			m.detailErrorTask = ""
+			m.displayedTaskID = msg.TaskID
+			m.taskTable.SetDisplayedTaskID(msg.TaskID)
+			m.syncDetail = "task revalidated"
+			return m, tea.Batch(m.refreshDetail(false, ""), m.fetchTimeEntriesCmd(msg.TaskID))
+		
+			case manualTaskRefreshResultMsg:
+		
 		m.detailLoading = false
 		m.detailLoadingMsg = ""
 		if msg.Err != nil {
@@ -1086,7 +1158,7 @@ func (m *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncDetail = m.sync.SyncStatus()
 		}
 		m.statusLine = "Sync completed"
-		return m, m.loadDataCmd()
+		return m, tea.Batch(m.loadDataCmd(), m.fetchRunningTimerCmd())
 
 	case commentResultMsg:
 		m.editorOpen = false
@@ -1187,8 +1259,18 @@ func (m RootModel) View() string {
 		headerText = fmt.Sprintf("lazy-click [%s] %s", m.provider, wsInfo)
 	}
 	title := HeaderStyle.Render(headerText)
+
+	timerStr := m.renderRunningTimer()
+	timerLine := ""
+	if timerStr != "" {
+		timerLine = TimerStyle.Render(timerStr) + " "
+	}
+
 	syncLine := m.syncProgressLine(totalWidth)
-	header := lipgloss.JoinHorizontal(lipgloss.Top, title, lipgloss.NewStyle().Width(totalWidth-lipgloss.Width(title)).Align(lipgloss.Right).Render(syncLine))
+	
+	rightWidth := totalWidth - lipgloss.Width(title)
+	rightContent := lipgloss.JoinHorizontal(lipgloss.Top, timerLine, syncLine)
+	header := lipgloss.JoinHorizontal(lipgloss.Top, title, lipgloss.NewStyle().Width(rightWidth).Align(lipgloss.Right).Render(rightContent))
 
 	const verticalPaneGap = 0
 	const horizontalPaneGap = 1
@@ -1409,6 +1491,74 @@ func (m RootModel) fetchCurrentUserCmd() tea.Cmd {
 		}
 		user, err := m.sync.GetCurrentUser(context.Background())
 		return userLoadedMsg{user: user, err: err}
+	}
+}
+
+func (m RootModel) fetchRunningTimerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.sync == nil {
+			return runningTimerLoadedMsg{err: fmt.Errorf("sync not available")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// WorkspaceID can be empty, provider will handle it
+		timer, err := m.sync.GetRunningTimeEntry(ctx, "")
+		return runningTimerLoadedMsg{timer: timer, err: err}
+	}
+}
+
+func (m RootModel) timerTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return timerTickMsg{}
+	})
+}
+
+func (m RootModel) stopTimerCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.sync == nil {
+			return syncResultMsg{err: fmt.Errorf("sync not available")}
+		}
+		if err := m.sync.QueueStopTimeTracking(""); err != nil {
+			return syncResultMsg{err: err}
+		}
+		return syncResultMsg{}
+	}
+}
+
+func (m RootModel) fetchTimeEntriesCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.sync == nil {
+			return timeEntriesLoadedMsg{err: fmt.Errorf("sync not available")}
+		}
+		entries, err := m.sync.GetTimeEntries(context.Background(), "", taskID)
+		return timeEntriesLoadedMsg{entries: entries, err: err}
+	}
+}
+
+func (m RootModel) toggleTimerCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.sync == nil {
+			return syncResultMsg{err: fmt.Errorf("sync not available")}
+		}
+
+		// If timer is running for this task, stop it.
+		// If timer is running for another task, stop it and start for this one.
+		// If no timer is running, start for this one.
+
+		running, _ := m.sync.GetRunningTimeEntry(context.Background(), "")
+		if running != nil {
+			if err := m.sync.QueueStopTimeTracking(""); err != nil {
+				return syncResultMsg{err: err}
+			}
+			if running.TaskID == taskID {
+				return syncResultMsg{}
+			}
+		}
+
+		if err := m.sync.QueueStartTimeTracking("", taskID); err != nil {
+			return syncResultMsg{err: err}
+		}
+		return syncResultMsg{}
 	}
 }
 
@@ -1913,6 +2063,41 @@ func (m RootModel) currentSelectedTaskID() string {
 	return row.ID
 }
 
+func (m RootModel) renderRunningTimer() string {
+	if m.runningTimer == nil {
+		return ""
+	}
+
+	taskName := m.runningTimer.TaskTitle
+	if taskName == "" {
+		taskName = m.runningTimer.TaskID
+	}
+
+	elapsed := time.Since(time.UnixMilli(m.runningTimer.StartUnixMS))
+	// Round to seconds
+	elapsed = elapsed.Round(time.Second)
+
+	// Truncate task name if needed
+	const maxNameLen = 25
+	if len(taskName) > maxNameLen {
+		taskName = taskName[:maxNameLen-3] + "..."
+	}
+
+	return fmt.Sprintf("󱎫 %s (%s)", taskName, formatRunningDuration(elapsed))
+}
+
+func formatRunningDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
+}
+
 func (m RootModel) displayedTaskRow() (components.TaskTableRow, bool) {
 	if m.displayedTaskID == "" {
 		return components.TaskTableRow{}, false
@@ -1974,7 +2159,7 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 	assignees := formatAssignees(task.AssigneesJSON)
 	dueDate := "-"
 	if task.DueAtUnixMS != nil {
-		dueDate = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
+		dueDate = formatRelativeTime(*task.DueAtUnixMS, false)
 	}
 
 	fields = append(fields,
@@ -1983,15 +2168,38 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 		components.DetailField{Key: "priority", Label: "Priority", Value: priority, Editable: true},
 		components.DetailField{Label: "Due Date", Value: dueDate},
 		components.DetailField{Label: "Estimate", Value: formatEstimate(task.EstimateMS)},
-		components.DetailField{Label: "Time Tracked", Value: formatEstimate(task.TimeTrackedMS)},
-		components.DetailField{Label: "Assignees", Value: assignees},
 	)
+
+	trackedStr := formatEstimate(task.TimeTrackedMS)
+	if m.runningTimer != nil && m.runningTimer.TaskID == task.ID {
+		elapsed := time.Since(time.UnixMilli(m.runningTimer.StartUnixMS))
+		trackedStr = fmt.Sprintf("%s (+%s RUNNING)", trackedStr, formatDuration(elapsed))
+	}
+	fields = append(fields, components.DetailField{Label: "Time Tracked", Value: trackedStr})
+	fields = append(fields, components.DetailField{Label: "Assignees", Value: assignees})
 
 	if m.detailError != "" && m.detailErrorTask == selected.ID {
 		fields = append(fields, components.DetailField{Label: "Last Error", Value: m.detailError})
 	}
 
 	fields = append(fields, components.DetailField{Key: "description", Label: "Description", Value: task.DescriptionMD, Editable: true, MultiLine: true})
+
+	if len(m.timeEntries) > 0 {
+		var sb strings.Builder
+		for _, entry := range m.timeEntries {
+			start := time.UnixMilli(entry.StartUnixMS).Format("2006-01-02 15:04")
+			end := "running"
+			if entry.EndUnixMS != nil {
+				end = time.UnixMilli(*entry.EndUnixMS).Format("15:04")
+			}
+			dur := formatDuration(time.Duration(entry.DurationMS) * time.Millisecond)
+			sb.WriteString(fmt.Sprintf("- %s: %s - %s (%s)\n", entry.User.Username, start, end, dur))
+			if entry.Description != "" {
+				sb.WriteString(fmt.Sprintf("  %s\n", entry.Description))
+			}
+		}
+		fields = append(fields, components.DetailField{Label: "Time Entries", Value: sb.String(), MultiLine: true})
+	}
 
 	var cmds []tea.Cmd
 	var taskAttachments []provider.Attachment
@@ -2037,10 +2245,15 @@ func (m *RootModel) refreshDetail(loading bool, loadingMsg string) tea.Cmd {
 			if author == "" {
 				author = "unknown"
 			}
+			relTime := formatRelativeTime(c.CreatedAtUnix, true)
+			label := author
+			if relTime != "" {
+				label = fmt.Sprintf("%s (%s)", author, relTime)
+			}
 			body := strings.TrimSpace(c.BodyMD)
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", author, body))
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", label, body))
 			commentFields = append(commentFields, components.DetailField{
-				Label: author,
+				Label: label,
 				Value: body,
 				MultiLine: true,
 			})
@@ -2594,7 +2807,7 @@ func mapTasksToRows(tasks []cache.TaskEntity, groupMode TaskGroupMode, subtaskMo
 		}
 		due := "-"
 		if task.DueAtUnixMS != nil {
-			due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
+			due = formatRelativeTime(*task.DueAtUnixMS, false)
 		}
 
 		indent := 0
@@ -2644,19 +2857,101 @@ func formatEstimate(estimateMS *int64) string {
 	if estimateMS == nil || *estimateMS <= 0 {
 		return "-"
 	}
-	seconds := *estimateMS / 1000
-	hours := seconds / 3600
-	minutes := (seconds % 3600) / 60
-	if hours > 0 && minutes > 0 {
-		return fmt.Sprintf("%dh %dm", hours, minutes)
+	return formatDuration(time.Duration(*estimateMS) * time.Millisecond)
+}
+
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	if h > 0 && m > 0 {
+		return fmt.Sprintf("%dh %dm", h, m)
 	}
-	if hours > 0 {
-		return fmt.Sprintf("%dh", hours)
+	if h > 0 {
+		return fmt.Sprintf("%dh", h)
 	}
-	if minutes > 0 {
-		return fmt.Sprintf("%dm", minutes)
+	if m > 0 {
+		return fmt.Sprintf("%dm", m)
 	}
 	return "<1m"
+}
+
+func formatRelativeTime(ms int64, includeTime bool) string {
+	if ms <= 0 {
+		return ""
+	}
+	now := time.Now()
+	target := time.UnixMilli(ms)
+
+	tDate := time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, target.Location())
+	nDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	if target.After(now) {
+		d := time.Until(target)
+		if includeTime {
+			if d < time.Minute {
+				return "In less than a minute"
+			}
+			if d < time.Hour {
+				m := int(d.Minutes())
+				if m == 1 {
+					return "In 1 minute"
+				}
+				return fmt.Sprintf("In %d minutes", m)
+			}
+			if d < 24*time.Hour && target.Day() == now.Day() {
+				h := int(d.Hours())
+				if h == 1 {
+					return "In 1 hour"
+				}
+				return fmt.Sprintf("In %d hours", h)
+			}
+		} else if target.Year() == now.Year() && target.Month() == now.Month() && target.Day() == now.Day() {
+			return "Today"
+		}
+
+		daysDiff := int(tDate.Sub(nDate).Hours() / 24)
+		if daysDiff == 1 {
+			return "Tomorrow"
+		}
+		if daysDiff <= 7 {
+			return target.Weekday().String()
+		}
+		return target.Format("2006-01-02")
+	}
+
+	d := time.Since(target)
+	if includeTime {
+		if d < time.Minute {
+			return "Just now"
+		}
+		if d < time.Hour {
+			m := int(d.Minutes())
+			if m == 1 {
+				return "1 minute ago"
+			}
+			return fmt.Sprintf("%d minutes ago", m)
+		}
+		if d < 24*time.Hour && target.Day() == now.Day() {
+			h := int(d.Hours())
+			if h == 1 {
+				return "1 hour ago"
+			}
+			return fmt.Sprintf("%d hours ago", h)
+		}
+	} else if target.Year() == now.Year() && target.Month() == now.Month() && target.Day() == now.Day() {
+		return "Today"
+	}
+
+	daysDiff := int(nDate.Sub(tDate).Hours() / 24)
+	if daysDiff == 1 {
+		return "Yesterday"
+	}
+	if daysDiff <= 7 {
+		return fmt.Sprintf("%d days ago", daysDiff)
+	}
+	return target.Format("2006-01-02")
 }
 
 func formatAssignees(raw string) string {
@@ -2993,7 +3288,7 @@ func placeSubtasksAfterParents(tasks []cache.TaskEntity) []cache.TaskEntity {
 func fuzzyScoreTask(task cache.TaskEntity, query string) (int, bool) {
 	due := "-"
 	if task.DueAtUnixMS != nil {
-		due = time.UnixMilli(*task.DueAtUnixMS).Format("2006-01-02")
+		due = formatRelativeTime(*task.DueAtUnixMS, false)
 	}
 
 	// High-priority fields
@@ -3123,6 +3418,29 @@ func (m *RootModel) openEditor(target EditorTarget, initialValue string, prompt 
 	return m, nil
 }
 
+func (m *RootModel) openTimeEntryEditor(entry *provider.TimeEntry) tea.Cmd {
+	start := time.UnixMilli(entry.StartUnixMS).Format("2006-01-02 15:04")
+	end := ""
+	if entry.EndUnixMS != nil {
+		end = time.UnixMilli(*entry.EndUnixMS).Format("2006-01-02 15:04")
+	}
+	
+	val := fmt.Sprintf("Description: %s\nStart: %s\nEnd: %s", entry.Description, start, end)
+	_, cmd := m.openEditor(EditorTargetTimeEntryEdit, val, "Edit Time Entry:", true)
+	m.editorContext["timeEntryID"] = entry.ID
+	return cmd
+}
+
+func (m *RootModel) openTimeEntryCreateEditor() tea.Cmd {
+	now := time.Now()
+	start := now.Add(-1 * time.Hour).Format("2006-01-02 15:04")
+	end := now.Format("2006-01-02 15:04")
+	
+	val := fmt.Sprintf("Description: \nStart: %s\nEnd: %s", start, end)
+	_, cmd := m.openEditor(EditorTargetTimeEntryCreate, val, "Add Manual Time Entry:", true)
+	return cmd
+}
+
 func (m *RootModel) openConfirm(prompt string, expected string, onConfirm func() tea.Cmd) (tea.Model, tea.Cmd) {
 	m.confirmOpen = true
 	m.confirmModel = components.NewConfirm(prompt, expected)
@@ -3196,10 +3514,82 @@ func (m RootModel) submitEditorCmd(target EditorTarget, value string) tea.Cmd {
 			}
 			return commentResultMsg{}
 
+		case EditorTargetTimeEntryCreate, EditorTargetTimeEntryEdit:
+			desc, start, end, err := parseTimeEntryEditorValue(value)
+			if err != nil {
+				return editResultMsg{err: err}
+			}
+			
+			if target == EditorTargetTimeEntryCreate {
+				if m.displayedTaskID == "" {
+					return editResultMsg{err: fmt.Errorf("no task opened")}
+				}
+				entry := provider.TimeEntry{
+					Description: desc,
+					StartUnixMS: start.UnixMilli(),
+				}
+				if !end.IsZero() {
+					                                        ms := end.UnixMilli()
+					                                        entry.EndUnixMS = &ms
+					                                        entry.DurationMS = ms - entry.StartUnixMS
+					                                }
+					                                if err := m.sync.QueueCreateTimeEntry("", m.displayedTaskID, entry); err != nil {
+					                                        return editResultMsg{err: err}
+					                                }
+					                        } else {				entryID := m.editorContext["timeEntryID"]
+				update := provider.TimeEntryUpdate{
+					Description: &desc,
+				}
+				s := start.UnixMilli()
+				update.StartUnixMS = &s
+				if !end.IsZero() {
+					e := end.UnixMilli()
+					update.EndUnixMS = &e
+				}
+				if err := m.sync.QueueUpdateTimeEntry("", entryID, update); err != nil {
+					return editResultMsg{err: err}
+				}
+			}
+			return editResultMsg{}
+
 		default:
 			return editResultMsg{err: fmt.Errorf("unknown editor target: %s", target)}
 		}
 	}
+}
+
+func parseTimeEntryEditorValue(val string) (string, time.Time, time.Time, error) {
+	lines := strings.Split(val, "\n")
+	var desc string
+	var start, end time.Time
+	var err error
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Description:") {
+			desc = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
+		} else if strings.HasPrefix(line, "Start:") {
+			s := strings.TrimSpace(strings.TrimPrefix(line, "Start:"))
+			start, err = time.ParseInLocation("2006-01-02 15:04", s, time.Local)
+			if err != nil {
+				return "", time.Time{}, time.Time{}, fmt.Errorf("invalid start date format: %v", err)
+			}
+		} else if strings.HasPrefix(line, "End:") {
+			e := strings.TrimSpace(strings.TrimPrefix(line, "End:"))
+			if e != "" {
+				end, err = time.ParseInLocation("2006-01-02 15:04", e, time.Local)
+				if err != nil {
+					return "", time.Time{}, time.Time{}, fmt.Errorf("invalid end date format: %v", err)
+				}
+			}
+		}
+	}
+
+	if start.IsZero() {
+		return "", time.Time{}, time.Time{}, fmt.Errorf("start date is required")
+	}
+
+	return desc, start, end, nil
 }
 
 func (m RootModel) submitFieldUpdateCmd(key string, value string) tea.Cmd {

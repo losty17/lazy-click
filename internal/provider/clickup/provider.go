@@ -253,6 +253,229 @@ func (p *Provider) DeleteComment(ctx context.Context, commentID string) error {
 	return p.client.DeleteComment(ctx, commentID)
 }
 
+func (p *Provider) StartTimeTracking(ctx context.Context, workspaceID string, taskID string) error {
+	if workspaceID == "" {
+		teams, err := p.client.getTeams(ctx)
+		if err != nil {
+			return err
+		}
+		if len(teams.Teams) == 0 {
+			return fmt.Errorf("no ClickUp teams found")
+		}
+		workspaceID = teams.Teams[0].ID.String() // Use first team as default
+	}
+	return p.client.StartTimeTracking(ctx, workspaceID, taskID)
+}
+
+func (p *Provider) StopTimeTracking(ctx context.Context, workspaceID string) error {
+	if workspaceID != "" {
+		return p.client.StopTimeTracking(ctx, workspaceID)
+	}
+
+	teams, err := p.client.getTeams(ctx)
+	if err != nil {
+		return err
+	}
+	if len(teams.Teams) == 0 {
+		return fmt.Errorf("no ClickUp teams found")
+	}
+
+	var lastErr error
+	for _, team := range teams.Teams {
+		// We try to stop on all teams. Usually only one will have a running timer.
+		// StopTimeTracking on a team with no running timer might return an error or be a no-op.
+		// We'll ignore errors for teams that might not have a timer.
+		if err := p.client.StopTimeTracking(ctx, team.ID.String()); err != nil {
+			lastErr = err
+		}
+	}
+	// If we have only one team and it failed, return that error.
+	if len(teams.Teams) == 1 {
+		return lastErr
+	}
+	return nil
+}
+
+func (p *Provider) GetRunningTimeEntry(ctx context.Context, workspaceID string) (*provider.TimeEntry, error) {
+	if workspaceID != "" {
+		dto, err := p.client.GetRunningTimeEntry(ctx, workspaceID)
+		if err != nil {
+			return nil, err
+		}
+		if dto == nil {
+			return nil, nil
+		}
+		entry := p.mapTimeEntry(*dto)
+		entry.IsRunning = true
+		return &entry, nil
+	}
+
+	teams, err := p.client.getTeams(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, team := range teams.Teams {
+		dto, err := p.client.GetRunningTimeEntry(ctx, team.ID.String())
+		if err != nil {
+			continue // Try next team
+		}
+		if dto != nil {
+			entry := p.mapTimeEntry(*dto)
+			entry.IsRunning = true
+			return &entry, nil
+		}
+	}
+
+	return nil, nil
+}
+
+func (p *Provider) GetTimeEntries(ctx context.Context, workspaceID string, taskID string) ([]provider.TimeEntry, error) {
+	if workspaceID == "" {
+		teams, err := p.client.getTeams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if len(teams.Teams) == 0 {
+			return nil, fmt.Errorf("no ClickUp teams found")
+		}
+		workspaceID = teams.Teams[0].ID.String()
+	}
+	dtos, err := p.client.GetTimeEntries(ctx, workspaceID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.TimeEntry, 0, len(dtos))
+	for _, dto := range dtos {
+		out = append(out, p.mapTimeEntry(dto))
+	}
+	return out, nil
+}
+
+func (p *Provider) CreateTimeEntry(ctx context.Context, workspaceID string, taskID string, entry provider.TimeEntry) (provider.TimeEntry, error) {
+	if workspaceID == "" {
+		teams, err := p.client.getTeams(ctx)
+		if err != nil {
+			return provider.TimeEntry{}, err
+		}
+		if len(teams.Teams) == 0 {
+			return provider.TimeEntry{}, fmt.Errorf("no ClickUp teams found")
+		}
+		workspaceID = teams.Teams[0].ID.String()
+	}
+
+	req := CreateTimeEntryRequest{
+		TID:         taskID,
+		Start:       entry.StartUnixMS,
+		Description: entry.Description,
+	}
+	if entry.EndUnixMS != nil {
+		req.End = *entry.EndUnixMS
+	}
+	if entry.DurationMS > 0 {
+		req.Duration = entry.DurationMS
+	}
+
+	if err := p.client.CreateTimeEntry(ctx, workspaceID, req); err != nil {
+		return provider.TimeEntry{}, err
+	}
+	// ClickUp Create Time Entry might not return the created entry, so we might want to fetch it.
+	// For now return the input.
+	return entry, nil
+}
+
+func (p *Provider) UpdateTimeEntry(ctx context.Context, workspaceID string, entryID string, update provider.TimeEntryUpdate) (provider.TimeEntry, error) {
+	req := UpdateTimeEntryRequest{
+		Description: update.Description,
+		Start:       update.StartUnixMS,
+		End:         update.EndUnixMS,
+	}
+
+	if workspaceID != "" {
+		if err := p.client.UpdateTimeEntry(ctx, workspaceID, entryID, req); err != nil {
+			return provider.TimeEntry{}, err
+		}
+		return provider.TimeEntry{ID: entryID}, nil
+	}
+
+	teams, err := p.client.getTeams(ctx)
+	if err != nil {
+		return provider.TimeEntry{}, err
+	}
+
+	var lastErr error
+	for _, team := range teams.Teams {
+		if err := p.client.UpdateTimeEntry(ctx, team.ID.String(), entryID, req); err == nil {
+			return provider.TimeEntry{ID: entryID}, nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	if lastErr != nil {
+		return provider.TimeEntry{}, lastErr
+	}
+	return provider.TimeEntry{}, fmt.Errorf("failed to update time entry: workspace not found")
+}
+
+func (p *Provider) DeleteTimeEntry(ctx context.Context, workspaceID string, entryID string) error {
+	if workspaceID != "" {
+		return p.client.DeleteTimeEntry(ctx, workspaceID, entryID)
+	}
+
+	teams, err := p.client.getTeams(ctx)
+	if err != nil {
+		return err
+	}
+
+	var lastErr error
+	for _, team := range teams.Teams {
+		if err := p.client.DeleteTimeEntry(ctx, team.ID.String(), entryID); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("failed to delete time entry: workspace not found")
+}
+
+func (p *Provider) mapTimeEntry(dto TimeEntryDTO) provider.TimeEntry {
+	start := parseUnixOrZero(dto.Start.String())
+	endVal := parseUnixOrZero(dto.End.String())
+	var end *int64
+	if endVal > 0 {
+		end = &endVal
+	}
+	duration := parseUnixOrZero(dto.Duration.String())
+	
+	taskID := ""
+	taskTitle := ""
+	if dto.Task != nil {
+		taskID = dto.Task.ID.String()
+		taskTitle = dto.Task.Name
+	}
+
+	return provider.TimeEntry{
+		ID:          dto.ID,
+		TaskID:      taskID,
+		TaskTitle:   taskTitle,
+		Description: dto.Description,
+		StartUnixMS: start,
+		EndUnixMS:   end,
+		DurationMS:  duration,
+		User: provider.User{
+			ID:       dto.User.ID.String(),
+			Provider: "clickup",
+			Username: dto.User.Username,
+			Email:    dto.User.Email,
+		},
+	}
+}
+
 func (p *Provider) mapTask(t TaskDTO, listID string) provider.Task {
 	task := provider.Task{
 		ID:            t.ID.String(),

@@ -22,6 +22,12 @@ const (
 	opUpdateComment = "update_comment"
 	opDeleteComment = "delete_comment"
 
+	opStartTimeTracking = "start_time_tracking"
+	opStopTimeTracking  = "stop_time_tracking"
+	opCreateTimeEntry   = "create_time_entry"
+	opUpdateTimeEntry   = "update_time_entry"
+	opDeleteTimeEntry   = "delete_time_entry"
+
 	// Deprecated
 	opAddComment = "add_comment"
 )
@@ -68,6 +74,32 @@ type updateCommentPayload struct {
 
 type deleteCommentPayload struct {
 	CommentID string `json:"comment_id"`
+}
+
+type startTimeTrackingPayload struct {
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	TaskID      string `json:"task_id"`
+}
+
+type stopTimeTrackingPayload struct {
+	WorkspaceID string `json:"workspace_id"`
+}
+
+type createTimeEntryPayload struct {
+	WorkspaceID string             `json:"workspace_id,omitempty"`
+	TaskID      string             `json:"task_id"`
+	Entry       provider.TimeEntry `json:"entry"`
+}
+
+type updateTimeEntryPayload struct {
+	WorkspaceID string                   `json:"workspace_id"`
+	EntryID     string                   `json:"entry_id"`
+	Update      provider.TimeEntryUpdate `json:"update"`
+}
+
+type deleteTimeEntryPayload struct {
+	WorkspaceID string `json:"workspace_id"`
+	EntryID     string `json:"entry_id"`
 }
 
 type addCommentPayload struct {
@@ -204,6 +236,74 @@ func (e *Engine) applyQueueItem(ctx context.Context, item cache.SyncQueueEntity)
 			return err
 		}
 		return e.repo.DeleteCommentByID(payload.CommentID)
+
+	case opStartTimeTracking:
+		var payload startTimeTrackingPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		workspaceID := payload.WorkspaceID
+		if workspaceID == "" {
+			workspaceID, _ = e.repo.GetWorkspaceIDForTask(payload.TaskID)
+		}
+		return e.provider.StartTimeTracking(ctx, workspaceID, payload.TaskID)
+
+	case opStopTimeTracking:
+		var payload stopTimeTrackingPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		return e.provider.StopTimeTracking(ctx, payload.WorkspaceID)
+
+	case opCreateTimeEntry:
+		var payload createTimeEntryPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		workspaceID := payload.WorkspaceID
+		if workspaceID == "" {
+			workspaceID, _ = e.repo.GetWorkspaceIDForTask(payload.TaskID)
+		}
+		
+		// ClickUp requires end or duration. If missing, we default duration to 1 minute or use current time if it's supposed to be finished.
+		if payload.Entry.EndUnixMS == nil && payload.Entry.DurationMS <= 0 {
+			// If we are creating a time entry manually, it usually should have a duration.
+			// If not provided, we can't really guess, but we must provide something to ClickUp.
+			// However, the TUI usually provides it if 'end' is parsed.
+			// Let's ensure we don't send an invalid request.
+			return fmt.Errorf("clickup requires end time or duration for manual time entries")
+		}
+
+		entry, err := e.provider.CreateTimeEntry(ctx, workspaceID, payload.TaskID, payload.Entry)
+		if err != nil {
+			_ = e.repo.UpdateTimeEntrySyncState(item.EntityID, cache.SyncStateError, err.Error())
+			return err
+		}
+		return e.repo.RemapEntityID(item.EntityID, entry.ID, "time_entry")
+
+	case opUpdateTimeEntry:
+		var payload updateTimeEntryPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		_, err := e.provider.UpdateTimeEntry(ctx, payload.WorkspaceID, payload.EntryID, payload.Update)
+		if err != nil {
+			_ = e.repo.UpdateTimeEntrySyncState(payload.EntryID, cache.SyncStateError, err.Error())
+			return err
+		}
+		return e.repo.UpdateTimeEntrySyncState(payload.EntryID, cache.SyncStateSynced, "")
+
+	case opDeleteTimeEntry:
+		var payload deleteTimeEntryPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		err := e.provider.DeleteTimeEntry(ctx, payload.WorkspaceID, payload.EntryID)
+		if err != nil {
+			_ = e.repo.UpdateTimeEntrySyncState(item.EntityID, cache.SyncStateError, err.Error())
+			return err
+		}
+		return e.repo.DeleteTimeEntryByID(payload.EntryID)
 
 	case opAddComment:
 		var payload addCommentPayload

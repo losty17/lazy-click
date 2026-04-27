@@ -156,6 +156,9 @@ func (m *RootModel) syncControlModeByPrefix() {
 	case string(ControlModePAT):
 		m.controlMode = ControlModePAT
 		m.controlInput = ""
+	case string(ControlModeTimeEntry):
+		m.controlMode = ControlModeTimeEntry
+		m.controlInput = strings.TrimSpace(trimmed[1:])
 	}
 }
 
@@ -173,6 +176,8 @@ func (m *RootModel) refreshControlResults() {
 		m.controlResults = m.buildHelpResults(m.controlInput)
 	case ControlModeAttachment:
 		m.controlResults = m.buildAttachmentResults(m.controlInput)
+	case ControlModeTimeEntry:
+		m.controlResults = m.buildTimeEntryResults(m.controlInput)
 	case ControlModePAT:
 		m.controlResults = m.buildCommandResults(m.controlInput)
 	default:
@@ -357,7 +362,7 @@ func (m *RootModel) buildCommentResults(query string) []controlResult {
 		results = append(results, controlResult{
 			Kind:      "comment",
 			Title:     c.BodyMD,
-			Subtitle:  c.AuthorName + " - " + time.UnixMilli(c.CreatedAtUnix).Format("2006-01-02 15:04"),
+			Subtitle:  c.AuthorName + " - " + formatRelativeTime(c.CreatedAtUnix, true),
 			Badge:     badge,
 			CommentID: c.ID,
 		})
@@ -438,6 +443,45 @@ func (m *RootModel) buildHelpResults(query string) []controlResult {
 		}
 	}
 	return out
+}
+
+func (m *RootModel) buildTimeEntryResults(query string) []controlResult {
+	if m.displayedTaskID == "" {
+		return []controlResult{{Kind: "error", Title: "No task opened"}}
+	}
+	
+	results := make([]controlResult, 0, len(m.timeEntries)+1)
+	results = append(results, controlResult{
+		Kind:     "command",
+		Title:    "Add Manual Time Entry",
+		Subtitle: "Enter start/end or duration",
+		Badge:    "action",
+		CommandID: "add_manual_time",
+	})
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	for _, entry := range m.timeEntries {
+		start := time.UnixMilli(entry.StartUnixMS).Format("2006-01-02 15:04")
+		end := "running"
+		if entry.EndUnixMS != nil {
+			end = time.UnixMilli(*entry.EndUnixMS).Format("15:04")
+		}
+		dur := formatDuration(time.Duration(entry.DurationMS) * time.Millisecond)
+		title := fmt.Sprintf("%s: %s - %s (%s)", entry.User.Username, start, end, dur)
+		
+		if query != "" && !strings.Contains(strings.ToLower(title), query) && !strings.Contains(strings.ToLower(entry.Description), query) {
+			continue
+		}
+
+		results = append(results, controlResult{
+			Kind:        "time_entry",
+			Title:       title,
+			Subtitle:    entry.Description,
+			Badge:       "entry",
+			TimeEntryID: entry.ID,
+		})
+	}
+	return results
 }
 
 func (m *RootModel) buildAttachmentResults(query string) []controlResult {
@@ -565,6 +609,23 @@ func (m *RootModel) runControlResult(result controlResult) tea.Cmd {
 			return m.openAttachmentCmd(*result.Attachment)
 		}
 		return nil
+	case "time_entry":
+		if result.TimeEntryID != "" {
+			// Find the entry
+			var target *provider.TimeEntry
+			for _, e := range m.timeEntries {
+				if e.ID == result.TimeEntryID {
+					target = &e
+					break
+				}
+			}
+			if target != nil {
+				// For now, let's just allow deleting or editing description
+				// In a full implementation, we'd open an editor for all fields
+				return m.openTimeEntryEditor(target)
+			}
+		}
+		return nil
 	case "command":
 		return m.executeControlCommand(result.CommandID)
 	default:
@@ -640,6 +701,8 @@ func (m *RootModel) executeControlCommand(id string) tea.Cmd {
 		}
 		m.statusLine = "No task opened"
 		return nil
+	case "add_manual_time":
+		return m.openTimeEntryCreateEditor()
 	case "refresh":
 		m.statusLine = "Refreshing data"
 		m.persistSessionSnapshot()
@@ -782,6 +845,7 @@ func (m *RootModel) controlCommands() []controlCommand {
 		{ID: "delete_list", Title: "Delete List", Subtitle: "Delete the selected list", Badge: "list", Aliases: []string{"remove list", "delete list", "rm list"}, Shortcut: m.keymap.DeleteList},
 		{ID: "add_comment", Title: "Add Comment", Subtitle: "Post a comment to the selected task", Badge: "comment", Aliases: []string{"post comment", "add comment", "new comment"}, Shortcut: m.keymap.AddComment},
 		{ID: "delete_comment", Title: "Delete Comment...", Subtitle: "Choose one of your comments to delete", Badge: "comment", Aliases: []string{"remove comment", "delete comment", "rm comment"}},
+		{ID: "add_manual_time", Title: "Add Manual Time Entry", Subtitle: "Enter start/end or duration", Badge: "task", Aliases: []string{"add time", "time entry"}, Shortcut: m.keymap.ManageTimeEntries},
 		{ID: "refresh", Title: "Refresh data", Subtitle: "Reload lists and tasks from cache", Badge: "core", Aliases: []string{"refresh", "reload"}, Shortcut: "r"},
 		{ID: "sync_now", Title: "Sync now", Subtitle: "Run immediate provider sync", Badge: "sync", Aliases: []string{"sync", "s"}, Shortcut: "s"},
 		{ID: "provider_next", Title: "Switch provider (next)", Subtitle: "Cycle active provider", Badge: "provider", Aliases: []string{"provider", "next provider"}},

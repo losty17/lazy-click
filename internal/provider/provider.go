@@ -24,4 +24,13 @@ type ProjectProvider interface {
 	AddComment(ctx context.Context, taskID string, text string) (Comment, error)
 	UpdateComment(ctx context.Context, commentID string, text string) (Comment, error)
 	DeleteComment(ctx context.Context, commentID string) error
+
+	// Time Tracking
+	StartTimeTracking(ctx context.Context, workspaceID string, taskID string) error
+	StopTimeTracking(ctx context.Context, workspaceID string) error
+	GetRunningTimeEntry(ctx context.Context, workspaceID string) (*TimeEntry, error)
+	GetTimeEntries(ctx context.Context, workspaceID string, taskID string) ([]TimeEntry, error)
+	CreateTimeEntry(ctx context.Context, workspaceID string, taskID string, entry TimeEntry) (TimeEntry, error)
+	UpdateTimeEntry(ctx context.Context, workspaceID string, entryID string, update TimeEntryUpdate) (TimeEntry, error)
+	DeleteTimeEntry(ctx context.Context, workspaceID string, entryID string) error
 }
